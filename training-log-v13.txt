@@ -1,0 +1,114 @@
+Loaded 155859 unique emails from 7 CSV file(s) in data/
+  - CEAS_08.csv: 39154 rows (phishing: 21842, legitimate: 17312)
+  - Enron.csv: 29767 rows (phishing: 13976, legitimate: 15791)
+  - Ling.csv: 2859 rows (phishing: 458, legitimate: 2401)
+  - Nazario.csv: 1565 rows (phishing: 1565, legitimate: 0)
+  - Nigerian_Fraud.csv: 3332 rows (phishing: 3332, legitimate: 0)
+  - SpamAssasin.csv: 5809 rows (phishing: 1718, legitimate: 4091)
+  - phishing_email.csv: 82485 rows (phishing: 42890, legitimate: 39595)
+Combined class balance -> legitimate: 76625, phishing: 79234
+Removed -> duplicates: 9112, empty: 1, invalid labels: 0, skipped files: 0
+Database is not connected yet: connect ECONNREFUSED 127.0.0.1:3307
+Guest scans still work. Start XAMPP MySQL before register/login/history.
+MailShield backend running at http://127.0.0.1:5023
+API is available immediately; ML model loads in the background if needed.
+Shuffled 80/20 split -> training: 124688, testing: 31171
+Training split -> core train: 105985, validation: 18703, vocabulary source: training set only
+Selecting discriminative features and building TF-IDF vocabulary...
+TF-IDF vocabulary size: 8000
+Empirical class priors -> phishing: 0.5085, legitimate: 0.4915
+Training Logistic Regression...
+  LR epoch 10/20 — bias=0.5826
+  LR epoch 20/20 — bias=0.4669
+Logistic Regression bias: 0.4669 (prior log-odds: 0.0338)
+Training Naive Bayes...
+Validation decision thresholds: { logistic_regression: 0.43, naive_bayes: 0.32 }
+
+=== ML Training Complete ===
+Total emails: 155859
+Phishing emails: 79234
+Legitimate emails: 76625
+Vocabulary size: 8000
+LR intercept (bias): 0.4669
+LR class prior (training): 0.5085
+NB priors (data-driven): phishing=0.508459, legitimate=0.491541
+PHISHING_CLASS_WEIGHT: 1
+Training time: 716.46s
+Train rows used: 105985 | Validation rows: 18703 | Test rows: 31171
+
+=== Test set (logistic regression) ===
+Accuracy: 98.22%
+Precision: 98%
+Recall: 98.51%
+F1-score: 98.25%
+ROC-AUC: 0.9979
+Confusion Matrix: {"tp":15641,"tn":14974,"fp":320,"fn":236}
+
+=== Test set (naive bayes) ===
+Accuracy: 96.17%
+Precision: 98.06%
+Recall: 94.36%
+F1-score: 96.17%
+ROC-AUC: 0.9924
+Confusion Matrix: {"tp":14981,"tn":14997,"fp":297,"fn":896}
+
+=== Holdout error analysis ===
+
+logistic_regression false positives: 320
+  FP 1: prob=0.8948 | quarantine summary 2 17 2008 these messages were quarantined as potential junk or virus infected messages and have not b
+  FP 2: prob=0.5427 | kudos congratulations promotion well deserved lucy
+  FP 3: prob=0.5692 | clamav virusdb update daily 5755 clamav database updated 09 feb 2008 11 38 0000 daily cvd version 5755 submission id 232
+  FP 4: prob=0.6484 | bonds the difference is 4 391 you can send more if you would like to add to the tax free money fund thank you keith hazl
+  FP 5: prob=0.7822 | econnect vpn you have been approved and added to the econnect remote access solution your user account will be granted r
+logistic_regression false negatives: 236
+  FN 1: prob=0.3134 | eureka hey check everythig site free actually stuff use everyday coupons food dining name click link get great gift taki
+  FN 2: prob=0.3526 | lola rudd tennishqptdnet greetings give shall meetfunction c12m4896b2bd1d9f3m4896b2bd1e1c3 var m4896b2bd1e99316 return p
+  FN 3: prob=0.2383 | quick note on your account stripe hi this is a quick note on your stripe account as it currently stands your account has
+  FN 4: prob=0.0425 | official notice for all users of barclays ibank ebay in 2000 to our topic in 1994 in 1873 martin luther king jr
+  FN 5: prob=0.4217 | discover sex fact poll conducted conglomerate major condom manufacturers 80 women unsatisfied partners size sexual perfo
+
+naive_bayes false positives: 297
+  FP 1: prob=1 | quarantine summary 2 17 2008 these messages were quarantined as potential junk or virus infected messages and have not b
+  FP 2: prob=0.472 | kudos congratulations promotion well deserved lucy
+  FP 3: prob=0.5566 | bonds the difference is 4 391 you can send more if you would like to add to the tax free money fund thank you keith hazl
+  FP 4: prob=0.949 | casual living yrjcztfszehooffercasuallivingusacom trouble viewing email click viewing pda click view email text email se
+  FP 5: prob=1 | bookscanada query credit card processing i have been approached by someone saying they represent canadian merchant assoc
+naive_bayes false negatives: 896
+  FN 1: prob=0.0459 | re check this out dear friend greetings hopefully my name is on the list below i am a retired attorney and about two yea
+  FN 2: prob=0.3176 | hugh6626t76bigfootcom hi httpclub4tfoxcom get emails every day offering show make money emails people making money expec
+  FN 3: prob=0.076 | fizeau steven wilfred cemetery corpsmen derriere frank weary fold westfield fold detour derriere salesmen synergy synerg
+  FN 4: prob=0.3084 | 18 viewpoint caan hear tour de france female 1977 1926 1948
+  FN 5: prob=0 | nv don t miss this super sale on quality pc programs if you want to install a new operation program on your computer or 
+
+=== Diverse validation set ===
+
+logistic_regression: 8/11 correct (72.73%)
+  [MISS] banking | expected=legitimate | prob=0.9329 | Phishing
+  [OK] shopping | expected=legitimate | prob=0.0844 | Legitimate
+  [OK] university | expected=legitimate | prob=0.0488 | Legitimate
+  [OK] hr | expected=legitimate | prob=0.404 | Legitimate
+  [MISS] shipping | expected=legitimate | prob=0.7654 | Phishing
+  [OK] meeting | expected=legitimate | prob=0.0946 | Legitimate
+  [MISS] password_change | expected=legitimate | prob=0.5359 | Phishing
+  [OK] newsletter | expected=legitimate | prob=0.1421 | Legitimate
+  [OK] real_phishing | expected=phishing | prob=0.9996 | Phishing
+  [OK] fake_invoice | expected=phishing | prob=0.5148 | Phishing
+  [OK] credential_theft | expected=phishing | prob=0.8762 | Phishing
+
+naive_bayes: 8/11 correct (72.73%)
+  [MISS] banking | expected=legitimate | prob=1 | Phishing
+  [OK] shopping | expected=legitimate | prob=0.0023 | Legitimate
+  [OK] university | expected=legitimate | prob=0 | Legitimate
+  [MISS] hr | expected=legitimate | prob=0.4011 | Phishing
+  [OK] shipping | expected=legitimate | prob=0.1629 | Legitimate
+  [OK] meeting | expected=legitimate | prob=0 | Legitimate
+  [OK] password_change | expected=legitimate | prob=0.2846 | Legitimate
+  [OK] newsletter | expected=legitimate | prob=0.1365 | Legitimate
+  [OK] real_phishing | expected=phishing | prob=0.9983 | Phishing
+  [MISS] fake_invoice | expected=phishing | prob=0.1029 | Legitimate
+  [OK] credential_theft | expected=phishing | prob=0.5758 | Phishing
+
+Saved refreshed model cache to C:\Users\USER\OneDrive\Desktop\Phishing Detection\data\.model-cache.json
+Training rows: 124688 | Holdout test rows: 31171
+Selected features: 8000
+Fresh training complete: 124688 training rows.

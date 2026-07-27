@@ -61,8 +61,7 @@ http://localhost:5173
 Put your phishing email dataset here:
 
 ```txt
-data/phishing_emails.csv
-```
+https://drive.google.com/drive/folders/13M2-GX2Y3bq16WJ4RHLxQxiYNoNgdUON?usp=sharing```
 
 The CSV needs these columns:
 

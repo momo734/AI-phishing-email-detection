@@ -1,0 +1,114 @@
+Loaded 155859 unique emails from 7 CSV file(s) in data/
+  - CEAS_08.csv: 39154 rows (phishing: 21842, legitimate: 17312)
+  - Enron.csv: 29767 rows (phishing: 13976, legitimate: 15791)
+  - Ling.csv: 2859 rows (phishing: 458, legitimate: 2401)
+  - Nazario.csv: 1565 rows (phishing: 1565, legitimate: 0)
+  - Nigerian_Fraud.csv: 3332 rows (phishing: 3332, legitimate: 0)
+  - SpamAssasin.csv: 5809 rows (phishing: 1718, legitimate: 4091)
+  - phishing_email.csv: 82485 rows (phishing: 42890, legitimate: 39595)
+Combined class balance -> legitimate: 76625, phishing: 79234
+Removed -> duplicates: 9112, empty: 1, invalid labels: 0, skipped files: 0
+Database is not connected yet: connect ECONNREFUSED 127.0.0.1:3307
+Guest scans still work. Start XAMPP MySQL before register/login/history.
+MailShield backend running at http://127.0.0.1:5021
+API is available immediately; ML model loads in the background if needed.
+Shuffled 80/20 split -> training: 124688, testing: 31171
+Training split -> core train: 105985, validation: 18703, vocabulary source: training set only
+Selecting discriminative features and building TF-IDF vocabulary...
+TF-IDF vocabulary size: 8000
+Empirical class priors -> phishing: 0.5085, legitimate: 0.4915
+Training Logistic Regression...
+  LR epoch 10/20 — bias=0.4742
+  LR epoch 20/20 — bias=0.4050
+Logistic Regression bias: 0.4050 (prior log-odds: 0.0338)
+Training Naive Bayes...
+Validation decision thresholds: { logistic_regression: 0.51, naive_bayes: 0.32 }
+
+=== ML Training Complete ===
+Total emails: 155859
+Phishing emails: 79234
+Legitimate emails: 76625
+Vocabulary size: 8000
+LR intercept (bias): 0.4050
+LR class prior (training): 0.5085
+NB priors (data-driven): phishing=0.508459, legitimate=0.491541
+PHISHING_CLASS_WEIGHT: 1
+Training time: 684.35s
+Train rows used: 105985 | Validation rows: 18703 | Test rows: 31171
+
+=== Test set (logistic regression) ===
+Accuracy: 88.74%
+Precision: 81.95%
+Recall: 99.88%
+F1-score: 90.03%
+ROC-AUC: 0.9959
+Confusion Matrix: {"tp":15858,"tn":11802,"fp":3492,"fn":19}
+
+=== Test set (naive bayes) ===
+Accuracy: 96.38%
+Precision: 97.53%
+Recall: 95.31%
+F1-score: 96.41%
+ROC-AUC: 0.9912
+Confusion Matrix: {"tp":15132,"tn":14911,"fp":383,"fn":745}
+
+=== Holdout error analysis ===
+
+logistic_regression false positives: 3492
+  FP 1: prob=0.6168 | nicholas clark suqhccl4org sat oct 13 2007 070055pm 0400 jarkko hietaniemi wrote something chanced upon httpwwwcodeproje
+  FP 2: prob=0.5931 | hr generalist group norma villarreal hr generalist brent price group hector mcloughlin hr generalist groups departments 
+  FP 3: prob=0.5563 | conflict of interest policy mailing to vendors attached is a copy of a sample letter which we are sending to selected ve
+  FP 4: prob=0.6355 | yitzchak scottthoennes geqqfguvefnorg tue october 30 2007 801 prjmtlrrbgmailcom wrote section begin check init end perlm
+  FP 5: prob=0.7337 | quarantine summary 2 17 2008 these messages were quarantined as potential junk or virus infected messages and have not b
+logistic_regression false negatives: 19
+  FN 1: prob=0.4973 | antiquity michael save 95 for all viagra cialis levitra jacques and the writer
+  FN 2: prob=0.3933 | adminurdaheanetie httpdengi150mcomgolden20streamhtmhttpdengi150mcomnewhtm irish linux users group iluglinuxie httpwwwlin
+  FN 3: prob=0.503 | battle for your happy future as it grows longer she will beg of you to penetrate her flower follow our recommendations t
+  FN 4: prob=0.503 | be done all with credit card debt mammie glen link marijeanne batool
+  FN 5: prob=0.3992 | know 85 world population eligible descendent pluggableconcept mckesson classicmeltdown rabbi bombproofemily loom grewocc
+
+naive_bayes false positives: 383
+  FP 1: prob=1 | quarantine summary 2 17 2008 these messages were quarantined as potential junk or virus infected messages and have not b
+  FP 2: prob=0.4104 | congratulations congrats promotion deserving peggy
+  FP 3: prob=0.7507 | kudos congratulations promotion well deserved lucy
+  FP 4: prob=1 | autosport catalog ixaoyeozzlbqkrspautosportcatalogcom autosport catalog 3day sale save 10 autosport car covers 3 days au
+  FP 5: prob=0.6979 | econnect vpn you have been approved and added to the econnect remote access solution your user account will be granted r
+naive_bayes false negatives: 745
+  FN 1: prob=0.0001 | re check this out dear friend greetings hopefully my name is on the list below i am a retired attorney and about two yea
+  FN 2: prob=0.0027 | hugh6626t76bigfootcom hi httpclub4tfoxcom get emails every day offering show make money emails people making money expec
+  FN 3: prob=0.1124 | fizeau steven wilfred cemetery corpsmen derriere frank weary fold westfield fold detour derriere salesmen synergy synerg
+  FN 4: prob=0.2581 | 18 viewpoint caan hear tour de france female 1977 1926 1948
+  FN 5: prob=0.0055 | nv don t miss this super sale on quality pc programs if you want to install a new operation program on your computer or 
+
+=== Diverse validation set ===
+
+logistic_regression: 6/11 correct (54.55%)
+  [MISS] banking | expected=legitimate | prob=0.7243 | Phishing
+  [MISS] shopping | expected=legitimate | prob=0.6807 | Phishing
+  [MISS] university | expected=legitimate | prob=0.5126 | Phishing
+  [OK] hr | expected=legitimate | prob=0.4922 | Legitimate
+  [MISS] shipping | expected=legitimate | prob=0.7114 | Phishing
+  [OK] meeting | expected=legitimate | prob=0.4686 | Legitimate
+  [MISS] password_change | expected=legitimate | prob=0.6689 | Phishing
+  [OK] newsletter | expected=legitimate | prob=0.4829 | Legitimate
+  [OK] real_phishing | expected=phishing | prob=0.8629 | Phishing
+  [OK] fake_invoice | expected=phishing | prob=0.8065 | Phishing
+  [OK] credential_theft | expected=phishing | prob=0.8157 | Phishing
+
+naive_bayes: 8/11 correct (72.73%)
+  [MISS] banking | expected=legitimate | prob=1 | Phishing
+  [OK] shopping | expected=legitimate | prob=0.1059 | Legitimate
+  [OK] university | expected=legitimate | prob=0 | Legitimate
+  [OK] hr | expected=legitimate | prob=0.0152 | Legitimate
+  [MISS] shipping | expected=legitimate | prob=0.5487 | Phishing
+  [OK] meeting | expected=legitimate | prob=0 | Legitimate
+  [MISS] password_change | expected=legitimate | prob=0.9585 | Phishing
+  [OK] newsletter | expected=legitimate | prob=0.0649 | Legitimate
+  [OK] real_phishing | expected=phishing | prob=1 | Phishing
+  [OK] fake_invoice | expected=phishing | prob=0.9998 | Phishing
+  [OK] credential_theft | expected=phishing | prob=0.994 | Phishing
+
+Saved refreshed model cache to C:\Users\USER\OneDrive\Desktop\Phishing Detection\data\.model-cache.json
+Training rows: 124688 | Holdout test rows: 31171
+Selected features: 8000
+Fresh training complete: 124688 training rows.

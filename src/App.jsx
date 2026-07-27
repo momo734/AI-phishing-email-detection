@@ -199,7 +199,12 @@ function App() {
 
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
-      throw new Error(data.error || 'Request failed.');
+      throw new Error(
+        data.error
+        || (response.status === 502 || response.status === 504
+          ? 'Cannot reach the backend. Run npm run dev from the PhishingDetection folder and wait for "MailShield backend running".'
+          : `Request failed (${response.status}).`),
+      );
     }
     return data;
   }, [session]);
@@ -299,6 +304,9 @@ function App() {
       });
       setAnalysis(result);
       setEmailView('highlights');
+      if (result.historyWarning) {
+        setMessage(result.historyWarning);
+      }
       if (!session) {
         setGuestScansUsed((count) => count + 1);
       }

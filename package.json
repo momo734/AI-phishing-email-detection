@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "concurrently -k -n server,client -c blue,green \"node server.js\" \"vite\"",
+    "dev": "concurrently -k -n server,client -c blue,green \"node server.js\" \"node scripts/wait-for-backend.mjs && vite\"",
     "start": "npm run dev",
     "server": "node server.js",
     "build": "vite build",

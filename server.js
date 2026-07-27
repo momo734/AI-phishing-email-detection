@@ -12,12 +12,13 @@ const PORT = Number(process.env.PORT || 5001);
 const JWT_SECRET = process.env.JWT_SECRET || 'change_this_secret_for_production';
 const MAX_TRAINING_ROWS = Number(process.env.MAX_TRAINING_ROWS || 5000);
 const ML_RANDOM_SEED = Number(process.env.ML_RANDOM_SEED || 42);
-const LR_EPOCHS = Number(process.env.LR_EPOCHS || 100);
+const LR_EPOCHS = Number(process.env.LR_EPOCHS || 20);
 const LR_LEARNING_RATE = Number(process.env.LR_LEARNING_RATE || 0.05);
 const LR_L2_REG = Number(process.env.LR_L2_REG || 0.01);
 const MIN_TERM_DOC_FREQUENCY = Number(process.env.MIN_TERM_DF || 2);
-const MAX_WEIGHT_ABS = Number(process.env.MAX_WEIGHT_ABS || 8);
-const PHISHING_CLASS_WEIGHT = Number(process.env.PHISHING_CLASS_WEIGHT || 1.12);
+const MIN_BIGRAM_CLASS_DOC_FREQUENCY = Number(process.env.MIN_BIGRAM_CLASS_DF || 15);
+const MAX_WEIGHT_ABS = Number(process.env.MAX_WEIGHT_ABS || 2);
+const PHISHING_CLASS_WEIGHT = Number(process.env.PHISHING_CLASS_WEIGHT || 1);
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const PHISHING_KEYWORDS = new Set([
@@ -62,6 +63,8 @@ app.use(cors({
     'http://127.0.0.1:5174',
     'http://localhost:5175',
     'http://127.0.0.1:5175',
+    'http://localhost:5176',
+    'http://127.0.0.1:5176',
   ],
   credentials: true,
   methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
@@ -124,7 +127,6 @@ function cleanEmailText(text) {
 }
 
 function isNoisyToken(term) {
-  if (PHISHING_KEYWORDS.has(term)) return false;
   if (term.length > 30) return true;
   if (/^\d+$/.test(term)) return true;
   if (/^[a-f0-9]{10,}$/.test(term)) return true;
@@ -143,11 +145,17 @@ function extractPhraseTokens(cleanedText) {
 
 function tokenizeClean(text) {
   const cleaned = cleanEmailText(text);
-  const baseTokens = cleaned
+  const words = cleaned
     .match(/[a-z0-9]+/g)
     ?.filter((term) => term.length > 1 && !STOP_WORDS.has(term) && !isNoisyToken(term)) || [];
 
-  return [...new Set([...baseTokens, ...extractPhraseTokens(cleaned)])];
+  const bigrams = [];
+  for (let index = 0; index < words.length - 1; index += 1) {
+    const bigram = `${words[index]}__${words[index + 1]}`;
+    if (bigram.length <= 48) bigrams.push(bigram);
+  }
+
+  return [...words, ...bigrams];
 }
 
 function countPhishingKeywordHits(tokens) {
@@ -211,9 +219,11 @@ function shuffleArray(items) {
   return copy;
 }
 
-function selectDiscriminativeFeatures(docs, maxFeatures = 6000) {
+function selectDiscriminativeFeatures(docs, maxFeatures = 8000) {
   const phishingDocs = docs.filter((doc) => doc.label === 'phishing');
   const legitimateDocs = docs.filter((doc) => doc.label === 'legitimate');
+  const phishRate = phishingDocs.length / docs.length;
+  const legitRate = legitimateDocs.length / docs.length;
   const scores = new Map();
 
   docs.forEach((doc) => {
@@ -228,36 +238,43 @@ function selectDiscriminativeFeatures(docs, maxFeatures = 6000) {
   const entries = [...scores.entries()]
     .map(([term, counts]) => {
       const total = counts.phishing + counts.legitimate;
-      const expectedPhishing = (total * phishingDocs.length) / docs.length;
-      const chiSquare = total > 0
-        ? ((counts.phishing - expectedPhishing) ** 2) / (expectedPhishing + 1)
+      const expectedPhishing = total * phishRate;
+      const expectedLegitimate = total * legitRate;
+      const chiSquare = expectedPhishing > 0 && expectedLegitimate > 0
+        ? ((counts.phishing - expectedPhishing) ** 2 / expectedPhishing)
+          + ((counts.legitimate - expectedLegitimate) ** 2 / expectedLegitimate)
         : 0;
-      return { term, counts, chiSquare, total };
+      const phishAssoc = (counts.phishing / Math.max(total, 1)) - phishRate;
+      return { term, counts, chiSquare, total, phishAssoc };
     })
-    .filter(({ term, total }) => total >= MIN_TERM_DOC_FREQUENCY || PHISHING_KEYWORDS.has(term));
+    .filter(({ term, counts, total, phishAssoc }) => {
+      if (term.includes('__')) {
+        return counts.phishing >= MIN_BIGRAM_CLASS_DOC_FREQUENCY
+          && counts.legitimate >= MIN_BIGRAM_CLASS_DOC_FREQUENCY;
+      }
+      if (total < MIN_TERM_DOC_FREQUENCY) return false;
+      if (phishAssoc > 0) {
+        const classBalance = Math.min(counts.phishing, counts.legitimate)
+          / Math.max(counts.phishing, counts.legitimate);
+        if (classBalance >= 0.25) return false;
+      }
+      return true;
+    });
 
   const perSide = Math.floor(maxFeatures / 2);
   const phishingTerms = entries
-    .filter(({ counts }) => {
-      const ratio = counts.phishing / Math.max(counts.legitimate, 1);
-      return counts.phishing >= 2 && counts.phishing >= counts.legitimate && ratio >= 1.5;
-    })
+    .filter(({ phishAssoc, chiSquare }) => phishAssoc > 0 && chiSquare > 0)
     .sort((a, b) => b.chiSquare - a.chiSquare)
     .slice(0, perSide)
     .map(({ term }) => term);
 
   const legitimateTerms = entries
-    .filter(({ counts }) => counts.legitimate >= 2 && counts.legitimate > counts.phishing)
-    .sort((a, b) => b.counts.legitimate - a.counts.legitimate || b.chiSquare - a.chiSquare)
+    .filter(({ phishAssoc, chiSquare }) => phishAssoc < 0 && chiSquare > 0)
+    .sort((a, b) => b.chiSquare - a.chiSquare)
     .slice(0, perSide)
     .map(({ term }) => term);
 
-  const selected = new Set([
-    ...phishingTerms,
-    ...legitimateTerms,
-    ...PHISHING_KEYWORDS,
-  ]);
-
+  const selected = new Set([...phishingTerms, ...legitimateTerms]);
   const remaining = entries
     .filter(({ term }) => !selected.has(term))
     .sort((a, b) => b.chiSquare - a.chiSquare)
@@ -664,8 +681,6 @@ function trainDatasetModel(trainRows, testRows = []) {
 
   const selectedVocabulary = selectDiscriminativeFeatures(trainDocs);
   const vocabularySet = new Set(selectedVocabulary);
-  PHISHING_KEYWORDS.forEach((term) => vocabularySet.add(term));
-  PHISHING_PHRASE_TOKENS.forEach(([, token]) => vocabularySet.add(token));
   const selectedWithKeywords = [...vocabularySet];
 
   const totalDocs = trainDocs.length;
@@ -684,14 +699,17 @@ function trainDatasetModel(trainRows, testRows = []) {
   });
 
   console.log(`TF-IDF vocabulary size: ${selectedWithKeywords.length}`);
-  console.log('Training Logistic Regression...');
 
   const classDocs = {
     phishing: trainDocs.filter((doc) => doc.label === 'phishing'),
     legitimate: trainDocs.filter((doc) => doc.label === 'legitimate'),
   };
 
+  console.log(`Empirical class priors -> phishing: ${(classDocs.phishing.length / totalDocs).toFixed(4)}, legitimate: ${(classDocs.legitimate.length / totalDocs).toFixed(4)}`);
+  console.log('Training Logistic Regression...');
+
   const logisticModel = trainLogisticRegression(trainDocs, idf, vocabularySet);
+  console.log(`Logistic Regression bias: ${logisticModel.bias.toFixed(4)} (prior log-odds: ${Math.log((classDocs.phishing.length / totalDocs) / (classDocs.legitimate.length / totalDocs)).toFixed(4)})`);
   console.log('Training Naive Bayes...');
   const naiveBayesModel = trainNaiveBayes(trainDocs, vocabularySet);
 
@@ -710,11 +728,13 @@ function trainDatasetModel(trainRows, testRows = []) {
     naiveBayes: naiveBayesModel.config,
     logisticWeights: logisticModel.weights,
     logisticBias: logisticModel.bias,
+    logisticClassPrior: logisticModel.classPrior,
     trainingConfig: {
       epochs: LR_EPOCHS,
       learningRate: LR_LEARNING_RATE,
       l2Regularization: LR_L2_REG,
       randomSeed: ML_RANDOM_SEED,
+      phishingClassWeight: PHISHING_CLASS_WEIGHT,
     },
   };
 
@@ -747,7 +767,9 @@ function trainLogisticRegression(
   l2 = LR_L2_REG,
 ) {
   const weights = {};
-  let bias = 0;
+  const phishingDocCount = docs.filter((doc) => doc.label === 'phishing').length;
+  const classPrior = phishingDocCount / Math.max(docs.length, 1);
+  let bias = Math.log(Math.max(classPrior, 1e-6) / Math.max(1 - classPrior, 1e-6));
 
   vocabularySet.forEach((term) => {
     weights[term] = (seededRandom() - 0.5) * 0.02;
@@ -765,7 +787,7 @@ function trainLogisticRegression(
       const prediction = sigmoid(linearScore);
       const error = (prediction - target) * classWeight;
 
-      bias = clipWeight(bias - learningRate * error);
+      bias -= learningRate * error;
       Object.entries(vector).forEach(([term, value]) => {
         if (weights[term] === undefined) weights[term] = 0;
         weights[term] = clipWeight(
@@ -773,9 +795,13 @@ function trainLogisticRegression(
         );
       });
     });
+
+    if ((epoch + 1) % 10 === 0 || epoch + 1 === epochs) {
+      console.log(`  LR epoch ${epoch + 1}/${epochs} — bias=${bias.toFixed(4)}`);
+    }
   }
 
-  return { weights, bias };
+  return { weights, bias, classPrior: Number(classPrior.toFixed(4)) };
 }
 
 function buildTfIdfVector(tokens, idf, vocabularySet = null) {
@@ -844,18 +870,23 @@ function trainNaiveBayes(trainDocs, vocabularySet) {
     });
   });
 
+  const totalDocs = classDocCounts.phishing + classDocCounts.legitimate;
+  const phishingPrior = classDocCounts.phishing / Math.max(totalDocs, 1);
+  const legitimatePrior = classDocCounts.legitimate / Math.max(totalDocs, 1);
+
   return {
     classTokenCounts,
     termDocCounts,
     totalClassTokens,
     classDocCounts,
     predictionPriors: {
-      phishing: 0.54,
-      legitimate: 0.46,
+      phishing: Number(phishingPrior.toFixed(6)),
+      legitimate: Number(legitimatePrior.toFixed(6)),
     },
     config: {
       alpha: 0.5,
       modelType: 'multinomial',
+      inferenceTokenWeight: 'sublinear',
     },
   };
 }
@@ -877,9 +908,8 @@ function predictNaiveBayes(tokens, model) {
   let logPhishing = Math.log(Math.max(phishPrior, 1e-6));
   let logLegitimate = Math.log(Math.max(legitPrior, 1e-6));
 
-  // Multinomial NB with Laplace smoothing:
-  // P(t|c) = (T_{t,c} + alpha) / (T_c + alpha * |V|)
-  // log P(c|d) += count(t,d) * log P(t|c)
+  // Multinomial NB with Laplace smoothing and sublinear term weighting at inference
+  // so repeated benign words (e.g. "account" in a statement email) do not dominate.
   Object.entries(termCounts).forEach(([term, count]) => {
     const phishTokenCount = model.classTokenCounts.phishing[term] || 0;
     const legitTokenCount = model.classTokenCounts.legitimate[term] || 0;
@@ -887,8 +917,9 @@ function predictNaiveBayes(tokens, model) {
       / (model.totalClassTokens.phishing + alpha * vocabularySize);
     const legitConditional = (legitTokenCount + alpha)
       / (model.totalClassTokens.legitimate + alpha * vocabularySize);
-    logPhishing += count * Math.log(Math.max(phishConditional, 1e-9));
-    logLegitimate += count * Math.log(Math.max(legitConditional, 1e-9));
+    const effectiveCount = 1 + Math.log(count);
+    logPhishing += effectiveCount * Math.log(Math.max(phishConditional, 1e-9));
+    logLegitimate += effectiveCount * Math.log(Math.max(legitConditional, 1e-9));
   });
 
   // Stable normalization: P(phish) = exp(lp) / (exp(lp) + exp(ll))
@@ -977,7 +1008,7 @@ function applyLowCoverageBoost(mlProbability, tokens, matchedFeatures, totalToke
 
 const datasetLoadResult = loadAllDatasets();
 const MODEL_CACHE_PATH = join(__dirname, 'data', '.model-cache.json');
-const MODEL_CACHE_VERSION = 6;
+const MODEL_CACHE_VERSION = 13;
 
 function buildModelFingerprint() {
   const datasetPaths = listDatasetCsvFiles();
@@ -1023,6 +1054,10 @@ function printTrainingReport(datasetStats, model, evaluation, trainingTimeMs) {
   console.log(`Phishing emails: ${datasetStats.phishing}`);
   console.log(`Legitimate emails: ${datasetStats.legitimate}`);
   console.log(`Vocabulary size: ${model.vocabulary.length}`);
+  console.log(`LR intercept (bias): ${model.logisticBias?.toFixed(4) ?? 'n/a'}`);
+  console.log(`LR class prior (training): ${model.logisticClassPrior ?? 'n/a'}`);
+  console.log(`NB priors (data-driven): phishing=${model.predictionPriors?.phishing}, legitimate=${model.predictionPriors?.legitimate}`);
+  console.log(`PHISHING_CLASS_WEIGHT: ${model.trainingConfig?.phishingClassWeight ?? PHISHING_CLASS_WEIGHT}`);
   console.log(`Training time: ${(trainingTimeMs / 1000).toFixed(2)}s`);
   console.log(`Train rows used: ${model.trainingMeta?.trainingRows ?? 'n/a'} | Validation rows: ${model.trainingMeta?.validationRows ?? 'n/a'} | Test rows: ${evaluation.sampleSize}`);
 
@@ -1033,8 +1068,36 @@ function printTrainingReport(datasetStats, model, evaluation, trainingTimeMs) {
     console.log(`Precision: ${metrics.precision}%`);
     console.log(`Recall: ${metrics.recall}%`);
     console.log(`F1-score: ${metrics.f1}%`);
+    console.log(`ROC-AUC: ${metrics.rocAuc}`);
     console.log(`Confusion Matrix: ${JSON.stringify(metrics.confusionMatrix)}`);
   });
+
+  if (evaluation.errorAnalysis) {
+    console.log('\n=== Holdout error analysis ===');
+    ['logistic_regression', 'naive_bayes'].forEach((modelType) => {
+      const errors = evaluation.errorAnalysis[modelType];
+      console.log(`\n${modelType} false positives: ${errors.falsePositives.length}`);
+      errors.falsePositives.slice(0, 5).forEach((sample, index) => {
+        console.log(`  FP ${index + 1}: prob=${sample.probability} | ${sample.preview}`);
+      });
+      console.log(`${modelType} false negatives: ${errors.falseNegatives.length}`);
+      errors.falseNegatives.slice(0, 5).forEach((sample, index) => {
+        console.log(`  FN ${index + 1}: prob=${sample.probability} | ${sample.preview}`);
+      });
+    });
+  }
+
+  if (evaluation.diverseValidation) {
+    console.log('\n=== Diverse validation set ===');
+    ['logistic_regression', 'naive_bayes'].forEach((modelType) => {
+      const summary = evaluation.diverseValidation[modelType];
+      console.log(`\n${modelType}: ${summary.correct}/${summary.total} correct (${summary.accuracy}%)`);
+      summary.results.forEach((row) => {
+        const mark = row.correct ? 'OK' : 'MISS';
+        console.log(`  [${mark}] ${row.category} | expected=${row.expected} | prob=${row.probability} | ${row.verdict}`);
+      });
+    });
+  }
   console.log('');
 }
 
@@ -1154,6 +1217,147 @@ function computeRocAuc(scores, labels) {
   return Number((auc / (totalPositive * totalNegative)).toFixed(4));
 }
 
+const DIVERSE_VALIDATION_SAMPLES = [
+  {
+    category: 'banking',
+    label: 'legitimate',
+    text: 'Subject: Your Monthly Account Statement is Ready\n\nDear Customer,\n\nYour monthly account statement for your online banking account is now available.\n\nPlease log in to your bank account through our official website or mobile app to view your statement.\n\nIf you have any questions, contact customer support.\n\nThank you for banking with us.',
+  },
+  {
+    category: 'shopping',
+    label: 'legitimate',
+    text: 'Subject: Your order has shipped\n\nHi Alex,\n\nGood news — your order #48291 has shipped and is on the way.\n\nEstimated delivery: Tuesday, March 12.\n\nTrack your package from your account dashboard.\n\nThanks for shopping with us.',
+  },
+  {
+    category: 'university',
+    label: 'legitimate',
+    text: 'Subject: Fall registration opens next week\n\nDear students,\n\nCourse registration for the fall semester opens Monday at 8 AM.\n\nPlease meet with your academic advisor before selecting classes.\n\nVisit the registrar website for the full schedule.\n\nUniversity Office of the Registrar',
+  },
+  {
+    category: 'hr',
+    label: 'legitimate',
+    text: 'Subject: Benefits enrollment reminder\n\nHello team,\n\nThis is a reminder that open enrollment for health and dental benefits closes Friday.\n\nReview the HR portal for plan details and submit your selections.\n\nContact HR support if you need assistance.\n\nPeople Operations',
+  },
+  {
+    category: 'shipping',
+    label: 'legitimate',
+    text: 'Subject: Delivery update for package 1Z999\n\nYour package is out for delivery today.\n\nDelivery address on file will be used. You can manage delivery preferences in the shipping app.\n\nThank you.',
+  },
+  {
+    category: 'meeting',
+    label: 'legitimate',
+    text: 'Subject: Project sync tomorrow\n\nHi everyone,\n\nLet us meet tomorrow at 10 AM to review the roadmap and sprint backlog.\n\nAgenda attached. Please bring status updates from your teams.\n\nThanks,\nJordan',
+  },
+  {
+    category: 'password_change',
+    label: 'legitimate',
+    text: 'Subject: Password changed successfully\n\nHello,\n\nThis confirms that the password for your account was changed successfully.\n\nIf you did not make this change, contact support immediately through the official help center.\n\nSecurity Team',
+  },
+  {
+    category: 'newsletter',
+    label: 'legitimate',
+    text: 'Subject: Weekly community newsletter\n\nHello members,\n\nWelcome to this week\'s newsletter with product updates, community highlights, and upcoming events.\n\nWe hope you enjoy this edition.\n\nBest regards,\nThe Team',
+  },
+  {
+    category: 'real_phishing',
+    label: 'phishing',
+    text: 'URGENT: Your account blocked. Immediate action required. Verify your password at http://secure-login-verify.xyz/update within 24 hours or your account will be suspended.',
+  },
+  {
+    category: 'fake_invoice',
+    label: 'phishing',
+    text: 'Subject: Invoice overdue — payment required today\n\nDear customer,\n\nYour invoice is overdue. Open the attached document and confirm payment immediately to avoid service interruption.\n\nPay now using the link below.',
+  },
+  {
+    category: 'credential_theft',
+    label: 'phishing',
+    text: 'Security alert: unusual sign-in detected. Confirm your login credentials now at http://account-verify-security.xyz/signin to restore access to your account.',
+  },
+];
+
+function previewEmailText(text, maxLength = 120) {
+  return cleanEmailText(text).slice(0, maxLength);
+}
+
+function predictRawProbability(tokens, model, modelType) {
+  return modelType === 'naive_bayes'
+    ? predictNaiveBayes(tokens, model).probability
+    : predictLogisticRegression(tokens, model).probability;
+}
+
+function analyzeHoldoutErrors(docs, model) {
+  const analysis = {
+    logistic_regression: { falsePositives: [], falseNegatives: [] },
+    naive_bayes: { falsePositives: [], falseNegatives: [] },
+  };
+
+  docs.forEach((doc) => {
+    const expectedPhishing = doc.label === 'phishing';
+
+    ['logistic_regression', 'naive_bayes'].forEach((modelType) => {
+      const probability = predictRawProbability(doc.tokens, model, modelType);
+      const threshold = getDecisionThreshold(model, modelType);
+      const predictedPhishing = probability >= threshold;
+      const bucket = analysis[modelType];
+      const sample = {
+        probability: Number(probability.toFixed(4)),
+        threshold,
+        preview: previewEmailText(doc.text),
+      };
+
+      if (!expectedPhishing && predictedPhishing) {
+        bucket.falsePositives.push(sample);
+      } else if (expectedPhishing && !predictedPhishing) {
+        bucket.falseNegatives.push(sample);
+      }
+    });
+  });
+
+  return analysis;
+}
+
+function evaluateDiverseValidationSet(model) {
+  const resultsByModel = {
+    logistic_regression: { total: 0, correct: 0, results: [] },
+    naive_bayes: { total: 0, correct: 0, results: [] },
+  };
+
+  DIVERSE_VALIDATION_SAMPLES.forEach((sample) => {
+    const tokens = tokenizeClean(sample.text);
+    const expectedPhishing = sample.label === 'phishing';
+
+    ['logistic_regression', 'naive_bayes'].forEach((modelType) => {
+      const probability = predictRawProbability(tokens, model, modelType);
+      const threshold = getDecisionThreshold(model, modelType);
+      const predictedPhishing = probability >= threshold;
+      const correct = predictedPhishing === expectedPhishing;
+      const bucket = resultsByModel[modelType];
+
+      bucket.total += 1;
+      if (correct) bucket.correct += 1;
+      bucket.results.push({
+        category: sample.category,
+        expected: sample.label,
+        probability: Number(probability.toFixed(4)),
+        threshold,
+        verdict: predictedPhishing ? 'Phishing' : 'Legitimate',
+        correct,
+      });
+    });
+  });
+
+  return {
+    logistic_regression: {
+      ...resultsByModel.logistic_regression,
+      accuracy: Number(((resultsByModel.logistic_regression.correct / resultsByModel.logistic_regression.total) * 100).toFixed(2)),
+    },
+    naive_bayes: {
+      ...resultsByModel.naive_bayes,
+      accuracy: Number(((resultsByModel.naive_bayes.correct / resultsByModel.naive_bayes.total) * 100).toFixed(2)),
+    },
+  };
+}
+
 function evaluateModelHoldout(docs, model = trainedModel) {
   const previousModel = trainedModel;
   trainedModel = model;
@@ -1168,11 +1372,12 @@ function evaluateModelHoldout(docs, model = trainedModel) {
       const expectedLabel = doc.label === 'phishing' ? 1 : 0;
 
       ['logistic_regression', 'naive_bayes'].forEach((modelType) => {
-        const result = classifyEmail(doc.text, modelType);
-        const predictedPhishing = result.prediction === 1;
+        const probability = predictRawProbability(doc.tokens, model, modelType);
+        const threshold = getDecisionThreshold(model, modelType);
+        const predictedPhishing = probability >= threshold;
         const bucket = metrics[modelType];
 
-        bucket.probabilities.push(result.finalPhishingProbability ?? result.phishingProbability);
+        bucket.probabilities.push(probability);
         bucket.labels.push(expectedLabel);
 
         if (expectedLabel === 1 && predictedPhishing) bucket.tp += 1;
@@ -1208,6 +1413,8 @@ function evaluateModelHoldout(docs, model = trainedModel) {
       sampleSize: docs.length,
       logistic_regression: summarize(metrics.logistic_regression, docs.length),
       naive_bayes: summarize(metrics.naive_bayes, docs.length),
+      errorAnalysis: analyzeHoldoutErrors(docs, model),
+      diverseValidation: evaluateDiverseValidationSet(model),
     };
   } finally {
     trainedModel = previousModel;
@@ -1912,17 +2119,20 @@ function authMiddleware(req, res, next) {
 }
 
 app.get('/api/health', async (_req, res) => {
+  let database = 'unavailable';
   try {
     await ensureDatabaseReady();
-    res.json({
-      ok: true,
-      database: databaseReady ? 'connected' : 'unavailable',
-      ml: mlReady ? 'ready' : 'loading',
-      port: PORT,
-    });
-  } catch (error) {
-    res.status(500).json({ ok: false, database: 'unavailable', ml: mlReady ? 'ready' : 'loading', error: error.message });
+    database = databaseReady ? 'connected' : 'unavailable';
+  } catch {
+    database = 'unavailable';
   }
+
+  return res.json({
+    ok: true,
+    database,
+    ml: mlReady ? 'ready' : 'loading',
+    port: PORT,
+  });
 });
 
 app.post('/api/auth/register', async (req, res) => {
@@ -1999,7 +2209,13 @@ app.post('/api/analyze', async (req, res) => {
     return res.status(503).json({ error: 'ML model is still loading. Wait a few seconds and try again.' });
   }
 
-  const analysis = classifyEmail(text, safeModel, { includeDebug: true });
+  let analysis;
+  try {
+    analysis = classifyEmail(text, safeModel, { includeDebug: true });
+  } catch (error) {
+    console.error('[analyze] classification failed:', error);
+    return res.status(500).json({ error: 'Scan failed while analyzing the email. Restart the backend and try again.' });
+  }
 
   console.log('[analyze] debug trace', analysis.predictionTrace ?? analysis._debug);
 
@@ -2008,11 +2224,12 @@ app.post('/api/analyze', async (req, res) => {
 
   const authHeader = req.headers.authorization || '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  let historyWarning = null;
 
   if (token) {
     try {
-      await ensureDatabaseReady();
       const user = jwt.verify(token, JWT_SECRET);
+      await ensureDatabaseReady();
       await db.query(
         `INSERT INTO detection_history
           (user_id, email_content, model_used, logistic_regression_score, naive_bayes_score, result, tfidf_terms)
@@ -2031,11 +2248,12 @@ app.post('/api/analyze', async (req, res) => {
       if (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError') {
         return res.status(401).json({ error: 'Your session expired. Please log in again.' });
       }
-      return res.status(503).json({ error: 'Database is unavailable. Start XAMPP MySQL to save registered scan history.' });
+      historyWarning = 'Scan completed, but history was not saved because the database is unavailable. Start XAMPP MySQL to enable scan history.';
+      console.warn('[analyze] history save skipped:', error.message);
     }
   }
 
-  return res.json(clientAnalysis);
+  return res.json(historyWarning ? { ...clientAnalysis, historyWarning } : clientAnalysis);
 });
 
 app.get('/api/history', authMiddleware, async (req, res) => {
@@ -2094,7 +2312,7 @@ initializeDatabase()
     console.error('Guest scans still work. Start XAMPP MySQL before register/login/history.');
   })
   .finally(() => {
-    app.listen(PORT, '127.0.0.1', () => {
+    const httpServer = app.listen(PORT, '127.0.0.1', () => {
       console.log(`MailShield backend running at http://127.0.0.1:${PORT}`);
       console.log('API is available immediately; ML model loads in the background if needed.');
 
@@ -2111,5 +2329,14 @@ initializeDatabase()
         .catch((error) => {
           console.error('ML model failed to load:', error.message);
         });
+    });
+
+    httpServer.on('error', (error) => {
+      if (error.code === 'EADDRINUSE') {
+        console.error(`Port ${PORT} is already in use. Close the other terminal running node server.js, or run: set PORT=5002 && node server.js`);
+      } else {
+        console.error('Backend failed to start:', error.message);
+      }
+      process.exit(1);
     });
   });
