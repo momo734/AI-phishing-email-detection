@@ -893,7 +893,7 @@ dd {
 
 .features-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 16px;
 }
 
@@ -911,18 +911,19 @@ dd {
   transform: translateY(-2px);
 }
 
-.feature-tag {
+.feature-icon {
   display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
   margin-bottom: 14px;
-  padding: 6px 10px;
-  border: 1px solid rgba(34, 211, 238, 0.18);
-  border-radius: 999px;
+  border: 1px solid rgba(34, 211, 238, 0.22);
+  border-radius: 12px;
   background: var(--accent-soft);
   color: var(--accent);
-  font-size: 0.72rem;
+  font-size: 1rem;
   font-weight: 800;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
 }
 
 .feature-card h2 {

@@ -5,97 +5,75 @@ const API_BASE_URL = import.meta.env.DEV ? '' : (import.meta.env.VITE_API_URL ||
 const FREE_SCAN_LIMIT = 5;
 const GUEST_SCANS_KEY = 'mailshieldGuestScans';
 const modelLabels = {
-  logistic_regression: 'Logistic Regression',
-  naive_bayes: 'Naive Bayes',
+  logistic_regression: 'Standard check',
+  naive_bayes: 'Second opinion',
 };
+
+function formatVerdictLabel(label, isPhishingFallback = false) {
+  const normalized = String(label || '').trim().toLowerCase();
+  if (normalized === 'phishing') return 'Looks like a scam';
+  if (normalized === 'legitimate') return 'Looks safe';
+  if (normalized) return label;
+  return isPhishingFallback ? 'Looks like a scam' : 'Looks safe';
+}
 
 const features = [
   {
-    title: 'Dual AI models',
-    description: 'Choose Logistic Regression or Naive Bayes before each scan and compare how each model scores the same email.',
-    tag: 'ML',
+    icon: 'Check',
+    title: 'Clear safe or risky answer',
+    description: 'Paste an email and see quickly whether it looks like a scam.',
   },
   {
-    title: 'TF-IDF scoring',
-    description: 'Every scan returns a phishing probability plus the top weighted terms that influenced the verdict.',
-    tag: 'Analysis',
+    icon: 'Explain',
+    title: 'Easy-to-read reasons',
+    description: 'We explain what looked wrong in everyday language, not tech jargon.',
   },
   {
-    title: 'AI explainability',
-    description: 'See a clear summary of why each email was flagged, plus actionable safety recommendations after every scan.',
-    tag: 'Explainability',
+    icon: 'Tips',
+    title: 'What to do next',
+    description: 'Get simple advice, like avoiding links and calling the company directly.',
   },
   {
-    title: 'Safety recommendations',
-    description: 'After every scan, get actionable guidance such as avoiding suspicious links, verifying through official sites, and deleting risky emails.',
-    tag: 'Guidance',
+    icon: 'Mark',
+    title: 'Warnings highlighted in the text',
+    description: 'Suspicious words and pushy phrases are marked so you can spot them fast.',
   },
   {
-    title: 'Trigger highlighting',
-    description: 'After a scan, switch to Flagged text in the email box to see suspicious keywords and phrases highlighted inline.',
-    tag: 'Visual',
-  },
-  {
-    title: 'Sentiment analysis',
-    description: 'Detects psychological pressure such as urgency and fear, with scores for tactics like "Account blocked" or "Immediate action required".',
-    tag: 'Psychology',
-  },
-  {
+    icon: 'Upload',
     title: 'Paste or upload',
-    description: 'Drop email text directly into the console or upload .txt, .eml, and .csv files for quick testing.',
-    tag: 'Input',
+    description: 'Copy from your inbox or upload a saved email file.',
   },
   {
-    title: 'Guest scanning',
-    description: 'Try MailShield without an account. Guests receive 5 free scans stored locally in the browser.',
-    tag: 'Access',
-  },
-  {
-    title: 'User accounts',
-    description: 'Register to remove the guest scan limit and keep using the detector for ongoing email checks.',
-    tag: 'Auth',
-  },
-  {
-    title: 'Scan history',
-    description: 'Logged-in users automatically save each scan to MySQL with verdict, score, model, and timestamp.',
-    tag: 'History',
-  },
-  {
-    title: 'Dataset training',
-    description: 'The backend trains from your phishing email CSV so vocabulary and scores reflect your dataset.',
-    tag: 'Backend',
-  },
-  {
-    title: 'Secure sessions',
-    description: 'Registration and login use bcrypt password hashing and JWT tokens for authenticated API requests.',
-    tag: 'Security',
+    icon: 'Free',
+    title: 'Free to try',
+    description: 'Five free checks without an account. Sign up for unlimited scans and saved history.',
   },
 ];
 
 const howItWorks = [
   {
-    step: '01',
-    title: 'Paste or upload email text',
-    description: 'Add suspicious message content to the scanner or upload a supported text file.',
+    step: '1',
+    title: 'Add the email',
+    description: 'Paste the message or upload a file.',
   },
   {
-    step: '02',
-    title: 'Pick a detection model',
-    description: 'Select Logistic Regression or Naive Bayes depending on the scoring approach you want.',
+    step: '2',
+    title: 'Tap Scan',
+    description: 'MailShield reads the email and checks for common scam signs.',
   },
   {
-    step: '03',
-    title: 'Review the verdict',
-    description: 'See the phishing score, highlighted trigger phrases, sentiment signals, and TF-IDF terms that drove the result.',
+    step: '3',
+    title: 'Review the result',
+    description: 'See if it looks safe, what stood out, and what you should do next.',
   },
 ];
 
 const highlightLegend = [
-  { category: 'domain', label: 'Suspicious domain or link mismatch' },
-  { category: 'keyword', label: 'Suspicious phishing keyword' },
-  { category: 'urgency', label: 'Urgency language' },
-  { category: 'fear', label: 'Fear or pressure language' },
-  { category: 'tfidf', label: 'Model signal term' },
+  { category: 'domain', label: 'Suspicious link' },
+  { category: 'keyword', label: 'Risky word' },
+  { category: 'urgency', label: 'Pushy deadline' },
+  { category: 'fear', label: 'Scare tactic' },
+  { category: 'tfidf', label: 'Unusual wording' },
 ];
 
 const recommendationPriorityClass = {
@@ -445,13 +423,13 @@ function App() {
         <section className="hero-band">
           <div>
             <p className="eyebrow">
-              {view === 'features' ? 'What MailShield offers' : 'Web based AI phishing email detection'}
+              {view === 'features' ? 'Simple email safety' : 'Phishing email checker'}
             </p>
             <h1>
               {view === 'features'
-                ? 'Everything built into your phishing detection platform.'
+                ? 'Everything you need to check emails safely.'
                 : view === 'history'
-                  ? 'Review past scans and model results.'
+                  ? 'Your past email checks'
                   : 'Detect phishing emails before you click.'}
             </h1>
           </div>
@@ -464,7 +442,7 @@ function App() {
             <div className="features-grid">
               {features.map((feature) => (
                 <article className="feature-card" key={feature.title}>
-                  <span className="feature-tag">{feature.tag}</span>
+                  <span className="feature-icon" aria-hidden="true">{feature.icon.slice(0, 1)}</span>
                   <h2>{feature.title}</h2>
                   <p>{feature.description}</p>
                 </article>
@@ -474,7 +452,7 @@ function App() {
             <div className="how-panel">
               <div className="panel-head">
                 <div>
-                  <p className="eyebrow">Workflow</p>
+                  <p className="eyebrow">Three steps</p>
                   <h2>How it works</h2>
                 </div>
               </div>
@@ -490,9 +468,9 @@ function App() {
               </div>
 
               <div className="features-cta">
-                <p>Ready to test an email? Open the scanner and run your first check.</p>
+                <p>Have a suspicious email? Check it now—it only takes a few seconds.</p>
                 <button className="solid-button" type="button" onClick={() => setView('scanner')}>
-                  Go to scanner
+                  Check an email
                 </button>
               </div>
             </div>
@@ -505,12 +483,12 @@ function App() {
               <div className="scan-panel">
                 <div className="panel-head">
                   <div>
-                    <p className="eyebrow">Email input</p>
-                    <h2>Detection console</h2>
+                    <p className="eyebrow">Email to check</p>
+                    <h2>Email scanner</h2>
                   </div>
-                  <select value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)}>
-                    <option value="logistic_regression">Logistic Regression</option>
-                    <option value="naive_bayes">Naive Bayes</option>
+                  <select value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)} aria-label="Scan type">
+                    <option value="logistic_regression">Standard check</option>
+                    <option value="naive_bayes">Second opinion</option>
                   </select>
                 </div>
 
@@ -588,18 +566,18 @@ function App() {
                   </button>
                   <button className="ghost-button" onClick={() => { setEmailText(''); setAnalysis(null); setEmailView('edit'); }}>Clear</button>
                   <button className="solid-button scan-button" disabled={loading} onClick={executeScan}>
-                    {loading ? 'Scanning...' : 'Run scan'}
+                    {loading ? 'Scanning...' : 'Scan'}
                   </button>
                 </div>
               </div>
             </div>
 
             <aside className="result-panel">
-              <p className="eyebrow">Prediction confidence</p>
+              <p className="eyebrow">Your result</p>
               {analysis ? (
                 <div className="analysis-stack">
                   <div className={`verdict ${isPhishing ? 'danger' : 'safe'}`}>
-                    <span>{verdictLabel || (isPhishing ? 'Phishing' : 'Legitimate')}</span>
+                    <span>{formatVerdictLabel(verdictLabel, isPhishing)}</span>
                     <strong>{confidencePercent}%</strong>
                   </div>
                   <div className="score-track">
@@ -607,37 +585,37 @@ function App() {
                   </div>
                   <dl className="score-details">
                     <div>
-                      <dt>Model</dt>
+                      <dt>Check type</dt>
                       <dd>{modelLabels[analysis.modelUsed || analysis.model_used] || modelLabels[selectedModel]}</dd>
                     </div>
                     <div>
-                      <dt>Confidence</dt>
-                      <dd>{confidencePercent}% ({isPhishing ? 'Phishing' : 'Legitimate'})</dd>
+                      <dt>How sure we are</dt>
+                      <dd>{confidencePercent}% ({isPhishing ? 'Looks like a scam' : 'Looks safe'})</dd>
                     </div>
                     <div>
-                      <dt>Phishing probability</dt>
+                      <dt>Scam likelihood</dt>
                       <dd>{phishPercent}%</dd>
                     </div>
                     <div>
-                      <dt>Legitimate probability</dt>
+                      <dt>Safe likelihood</dt>
                       <dd>{legitPercent}%</dd>
                     </div>
                     <div>
-                      <dt>Matched TF-IDF terms</dt>
+                      <dt>Warning signs found</dt>
                       <dd>{analysis.tfidf?.matchedTerms ?? 0}</dd>
                     </div>
                   </dl>
 
                   {explainabilitySummary && (
                     <div className="analysis-card explain-panel">
-                      <h3>AI explainability</h3>
+                      <h3>Why we flagged this</h3>
                       <p className="explain-summary">{explainabilitySummary}</p>
                     </div>
                   )}
 
                   {recommendations.length > 0 && (
                     <div className="analysis-card recommendation-panel">
-                      <h3>Safety recommendations</h3>
+                      <h3>What to do</h3>
                       <ul className="recommendation-list">
                         {recommendations.map((item, idx) => (
                           <li
@@ -653,20 +631,20 @@ function App() {
 
                   {analysis.sentiment && (
                     <div className="analysis-card sentiment-panel">
-                      <h3>Sentiment analysis</h3>
+                      <h3>Pressure tactics</h3>
                       <p className="sentiment-tone">
                         Overall tone: <strong>{analysis.sentiment.overallTone || analysis.sentiment.overall_tone || 'Neutral'}</strong>
                       </p>
                       <div className="sentiment-scores">
                         <div className="sentiment-score">
-                          <span>Urgency</span>
+                          <span>Rush factor</span>
                           <div className="score-track">
                             <div className="danger-fill" style={{ width: `${analysis.sentiment.urgencyScore ?? analysis.sentiment.urgency_score ?? 0}%` }} />
                           </div>
                           <b>{analysis.sentiment.urgencyScore ?? analysis.sentiment.urgency_score ?? 0}%</b>
                         </div>
                         <div className="sentiment-score">
-                          <span>Fear</span>
+                          <span>Scare factor</span>
                           <div className="score-track">
                             <div className="danger-fill" style={{ width: `${analysis.sentiment.fearScore ?? analysis.sentiment.fear_score ?? 0}%` }} />
                           </div>
@@ -689,7 +667,7 @@ function App() {
                   )}
 
                   <div className="analysis-card terms-list">
-                    <h3>Top TF-IDF signals</h3>
+                    <h3>Words that stood out</h3>
                     {analysis.tfidf?.topTerms?.length || analysis.tfidf?.top_terms?.length ? (
                       (analysis.tfidf.topTerms || analysis.tfidf.top_terms).map((term, idx) => (
                         <div className="term-row" key={`${term.term}-${idx}`}>
@@ -705,7 +683,7 @@ function App() {
                 </div>
               ) : (
                 <div className="empty-result">
-                  Choose a model, paste an email, and run a scan to see the TF-IDF based score.
+                  Paste an email and tap Scan to see if it looks safe.
                 </div>
               )}
             </aside>
@@ -742,7 +720,7 @@ function App() {
                     <article className="history-row" key={row.id}>
                       <div>
                         <strong style={{ color: rowVerdict ? 'var(--danger-color, #dc3545)' : 'var(--success-color, #28a745)' }}>
-                          {row.result || row.verdict}
+                          {formatVerdictLabel(row.result || row.verdict, rowVerdict)}
                         </strong>
                         <p>{row.email_content || row.text}</p>
                         <span>{new Date(row.scanned_at || row.created_at).toLocaleString()}</span>
@@ -773,7 +751,7 @@ function App() {
             <span className="brand-mark">MS</span>
             <div>
               <strong>MailShield</strong>
-              <p>AI-powered phishing email detection using TF-IDF scoring.</p>
+              <p>Check suspicious emails before you click or reply.</p>
             </div>
           </div>
 
@@ -793,7 +771,7 @@ function App() {
 
           <div className="footer-meta">
             <span>&copy; {new Date().getFullYear()} MailShield</span>
-            <span>Logistic Regression &amp; Naive Bayes models</span>
+            <span>Two scan modes: standard check &amp; second opinion</span>
           </div>
         </div>
       </footer>
