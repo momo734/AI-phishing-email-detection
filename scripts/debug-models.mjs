@@ -1,6 +1,7 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { API_BASE } from './api-config.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = join(__dirname, '..');
@@ -65,11 +66,11 @@ const tests = [
   { name: 'short-hi', text: 'Hi John, can we talk tomorrow?' },
 ];
 
-console.log('\n=== LIVE API TESTS (requires server on :5001) ===');
+console.log(`\n=== LIVE API TESTS (${API_BASE}) ===`);
 for (const sample of tests) {
   for (const modelType of ['logistic_regression', 'naive_bayes']) {
     try {
-      const res = await fetch('http://127.0.0.1:5001/api/analyze', {
+      const res = await fetch(`${API_BASE}/api/analyze`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: sample.text, modelType }),

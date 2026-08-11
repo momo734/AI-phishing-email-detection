@@ -1,5 +1,6 @@
-const PORT = Number(process.env.EVAL_PORT || 5002);
-const baseUrl = `http://127.0.0.1:${PORT}`;
+import { API_BASE, API_PORT, waitForAnalyzeApi } from './api-config.mjs';
+
+const baseUrl = API_BASE;
 
 const newsletter = `Hello community members,
 
@@ -18,24 +19,12 @@ const samples = [
 ];
 
 async function waitForServer(maxAttempts = 60) {
-  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    try {
-      const res = await fetch(`${baseUrl}/api/analyze`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: 'ping', modelType: 'logistic_regression' }),
-      });
-      if (res.ok) return true;
-    } catch {
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-    }
-  }
-  return false;
+  return waitForAnalyzeApi(maxAttempts, baseUrl);
 }
 
 console.log(`Waiting for backend at ${baseUrl} ...`);
 if (!(await waitForServer())) {
-  console.error(`Start the server first: $env:PORT=${PORT}; node server.js`);
+  console.error(`Start the server first: PORT=${API_PORT} node server.js (or set EVAL_PORT)`);
   process.exit(1);
 }
 

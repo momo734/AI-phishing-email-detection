@@ -1,3 +1,5 @@
+import { API_BASE } from './api-config.mjs';
+
 const samples = [
   {
     label: 'legitimate',
@@ -17,11 +19,11 @@ const samples = [
   },
 ];
 
-console.log('Requires backend on http://127.0.0.1:5001\n');
+console.log(`Requires backend on ${API_BASE}\n`);
 
 for (const sample of samples) {
   for (const modelType of ['logistic_regression', 'naive_bayes']) {
-    const response = await fetch('http://127.0.0.1:5001/api/analyze', {
+    const response = await fetch(`${API_BASE}/api/analyze`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: sample.text, modelType }),

@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { API_BASE } from './api-config.mjs';
 
 const content = readFileSync(new URL('../data/Phishing_Email.csv', import.meta.url), 'utf8');
 const lines = content.split(/\r?\n/).slice(1, 400);
@@ -20,7 +21,7 @@ const samples = [
 
 for (const [name, text] of samples) {
   for (const modelType of ['logistic_regression', 'naive_bayes']) {
-    const response = await fetch('http://127.0.0.1:5001/api/analyze', {
+    const response = await fetch(`${API_BASE}/api/analyze`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text, modelType }),

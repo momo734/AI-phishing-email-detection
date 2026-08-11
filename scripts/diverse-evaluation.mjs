@@ -1,58 +1,10 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { API_BASE, API_PORT, isApiReachable, waitForAnalyzeApi } from './api-config.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const cachePath = join(__dirname, '..', 'data', '.model-cache.json');
-
-if (!existsSync(cachePath)) {
-  console.error('No model cache found. Start the server once to train: npm run dev');
-  process.exit(1);
-}
-
-const { spawn } = await import('node:child_process');
-const port = Number(process.env.EVAL_PORT || 5015);
-
-const server = spawn(process.execPath, ['server.js'], {
-  cwd: join(__dirname, '..'),
-  env: { ...process.env, PORT: String(port) },
-  stdio: ['ignore', 'pipe', 'pipe'],
-});
-
-let bootLog = '';
-server.stdout.on('data', (chunk) => {
-  bootLog += chunk.toString();
-  process.stdout.write(chunk);
-});
-server.stderr.on('data', (chunk) => {
-  bootLog += chunk.toString();
-  process.stderr.write(chunk);
-});
-
-async function waitForReady(maxAttempts = 120) {
-  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    if (bootLog.includes('Server listening') || bootLog.includes(`port ${port}`)) {
-      try {
-        const res = await fetch(`http://127.0.0.1:${port}/api/analyze`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: 'ping', modelType: 'logistic_regression' }),
-        });
-        if (res.ok) return true;
-      } catch {
-        // retry
-      }
-    }
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-  }
-  return false;
-}
-
-if (!(await waitForReady())) {
-  server.kill();
-  console.error('Server failed to become ready.');
-  process.exit(1);
-}
+const root = join(__dirname, '..');
 
 const samples = [
   ['banking', 'legitimate', 'Subject: Your Monthly Account Statement is Ready\n\nDear Customer,\n\nYour monthly account statement for your online banking account is now available.\n\nPlease log in to your bank account through our official website or mobile app to view your statement.\n\nIf you have any questions, contact customer support.\n\nThank you for banking with us.'],
@@ -68,13 +20,35 @@ const samples = [
   ['credential_theft', 'phishing', 'Security alert: unusual sign-in detected. Confirm your login credentials now at http://account-verify-security.xyz/signin to restore access to your account.'],
 ];
 
+let apiBase = API_BASE;
+let managedServer = null;
+
+if (await isApiReachable(apiBase)) {
+  console.log(`Using existing API at ${apiBase}`);
+} else {
+  console.log(`Starting temporary API on port ${API_PORT}...`);
+  managedServer = spawn(process.execPath, ['server.js'], {
+    cwd: root,
+    env: { ...process.env, PORT: String(API_PORT) },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  managedServer.stdout.on('data', (chunk) => process.stdout.write(chunk));
+  managedServer.stderr.on('data', (chunk) => process.stderr.write(chunk));
+
+  if (!(await waitForAnalyzeApi(120, apiBase))) {
+    managedServer.kill();
+    console.error('Server failed to become ready.');
+    process.exit(1);
+  }
+}
+
 console.log('\n=== DIVERSE VALIDATION (API raw probabilities) ===\n');
 
 for (const modelType of ['logistic_regression', 'naive_bayes']) {
   let correct = 0;
   console.log(`--- ${modelType} ---`);
   for (const [category, expected, text] of samples) {
-    const res = await fetch(`http://127.0.0.1:${port}/api/analyze`, {
+    const res = await fetch(`${apiBase}/api/analyze`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text, modelType }),
@@ -88,4 +62,6 @@ for (const modelType of ['logistic_regression', 'naive_bayes']) {
   console.log(`Accuracy: ${correct}/${samples.length} (${((correct / samples.length) * 100).toFixed(1)}%)\n`);
 }
 
-server.kill();
+if (managedServer) {
+  managedServer.kill();
+}

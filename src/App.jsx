@@ -797,7 +797,7 @@ function App() {
 
             <label>
               Password
-              <input type="password" value={authForm.password} onChange={(event) => setAuthForm({ ...authForm, password: event.target.value })} required minLength={6} />
+              <input type="password" value={authForm.password} onChange={(event) => setAuthForm({ ...authForm, password: event.target.value })} required minLength={8} />
             </label>
 
             <button className="solid-button full-width" type="submit" disabled={loading}>

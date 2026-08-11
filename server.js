@@ -3,13 +3,38 @@ import mysql from 'mysql2/promise';
 import cors from 'cors';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, writeFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const app = express();
 const PORT = Number(process.env.PORT || 5001);
-const JWT_SECRET = process.env.JWT_SECRET || 'change_this_secret_for_production';
+const NODE_ENV = process.env.NODE_ENV || 'development';
+const INSECURE_JWT_PLACEHOLDER = 'change_this_secret_for_production';
+const BCRYPT_ROUNDS = Number(process.env.BCRYPT_ROUNDS || 12);
+const MAX_NAME_LENGTH = 100;
+const MAX_EMAIL_LENGTH = 150;
+const MAX_PASSWORD_LENGTH = 128;
+const MAX_ANALYZE_TEXT_LENGTH = 100_000;
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function resolveJwtSecret() {
+  const secret = process.env.JWT_SECRET?.trim();
+  if (NODE_ENV === 'production') {
+    if (!secret || secret === INSECURE_JWT_PLACEHOLDER || secret.length < 32) {
+      throw new Error('Set JWT_SECRET to a random string of at least 32 characters before running in production.');
+    }
+    return secret;
+  }
+  if (secret && secret !== INSECURE_JWT_PLACEHOLDER) {
+    return secret;
+  }
+  console.warn('[security] JWT_SECRET is not set. Using an ephemeral development secret; sessions reset on restart.');
+  return randomBytes(32).toString('hex');
+}
+
+const JWT_SECRET = resolveJwtSecret();
 const MAX_TRAINING_ROWS = Number(process.env.MAX_TRAINING_ROWS || 5000);
 const ML_RANDOM_SEED = Number(process.env.ML_RANDOM_SEED || 42);
 const LR_EPOCHS = Number(process.env.LR_EPOCHS || 20);
@@ -17,7 +42,11 @@ const LR_LEARNING_RATE = Number(process.env.LR_LEARNING_RATE || 0.05);
 const LR_L2_REG = Number(process.env.LR_L2_REG || 0.01);
 const MIN_TERM_DOC_FREQUENCY = Number(process.env.MIN_TERM_DF || 2);
 const MIN_BIGRAM_CLASS_DOC_FREQUENCY = Number(process.env.MIN_BIGRAM_CLASS_DF || 15);
+const MIN_BIGRAM_MINORITY_RATIO = Number(process.env.MIN_BIGRAM_MINORITY_RATIO || 0.20);
+const MIN_UNIGRAM_MINORITY_RATIO = Number(process.env.MIN_UNIGRAM_MINORITY_RATIO || 0.06);
+const AMBIGUOUS_CLASS_BALANCE = Number(process.env.AMBIGUOUS_CLASS_BALANCE || 0.25);
 const MAX_WEIGHT_ABS = Number(process.env.MAX_WEIGHT_ABS || 2);
+const MAX_LR_BIAS_ABS = Number(process.env.MAX_LR_BIAS_ABS || 0.75);
 const PHISHING_CLASS_WEIGHT = Number(process.env.PHISHING_CLASS_WEIGHT || 1);
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -40,8 +69,8 @@ const PHISHING_PHRASE_TOKENS = [
 ];
 
 const DEFAULT_DECISION_THRESHOLDS = {
-  logistic_regression: 0.48,
-  naive_bayes: 0.42,
+  logistic_regression: 0.42,
+  naive_bayes: 0.32,
 };
 
 let randomState = ML_RANDOM_SEED;
@@ -71,6 +100,68 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 app.use(express.json({ limit: '1mb' }));
+
+function isValidEmail(email) {
+  const normalized = String(email || '').trim().toLowerCase();
+  return normalized.length > 0
+    && normalized.length <= MAX_EMAIL_LENGTH
+    && EMAIL_PATTERN.test(normalized);
+}
+
+function normalizeAuthName(name) {
+  return String(name || '').trim().slice(0, MAX_NAME_LENGTH);
+}
+
+function validatePassword(password) {
+  const value = String(password || '');
+  if (value.length < 8) {
+    return 'Password must be at least 8 characters.';
+  }
+  if (value.length > MAX_PASSWORD_LENGTH) {
+    return `Password must be at most ${MAX_PASSWORD_LENGTH} characters.`;
+  }
+  return null;
+}
+
+function parsePositiveInt(value) {
+  const parsed = Number.parseInt(String(value), 10);
+  if (!Number.isInteger(parsed) || parsed <= 0) return null;
+  return parsed;
+}
+
+function createRateLimiter({ windowMs, max, message }) {
+  const buckets = new Map();
+
+  return (req, res, next) => {
+    const key = req.ip || req.socket.remoteAddress || 'unknown';
+    const now = Date.now();
+    const bucket = buckets.get(key);
+
+    if (!bucket || now - bucket.start >= windowMs) {
+      buckets.set(key, { start: now, count: 1 });
+      return next();
+    }
+
+    bucket.count += 1;
+    if (bucket.count > max) {
+      return res.status(429).json({ error: message });
+    }
+
+    return next();
+  };
+}
+
+const analyzeRateLimiter = createRateLimiter({
+  windowMs: 60_000,
+  max: Number(process.env.ANALYZE_RATE_LIMIT || 30),
+  message: 'Too many scan requests. Please wait a minute and try again.',
+});
+
+const authRateLimiter = createRateLimiter({
+  windowMs: 15 * 60_000,
+  max: Number(process.env.AUTH_RATE_LIMIT || 20),
+  message: 'Too many authentication attempts. Please wait and try again.',
+});
 
 const db = mysql.createPool({
   host: process.env.DB_HOST || '127.0.0.1',
@@ -219,6 +310,39 @@ function shuffleArray(items) {
   return copy;
 }
 
+function passesVocabularyFeatureFilter({ term, counts, total, phishAssoc }) {
+  const majorityCount = Math.max(counts.phishing, counts.legitimate, 1);
+  const minorityCount = Math.min(counts.phishing, counts.legitimate);
+  const classBalance = minorityCount / majorityCount;
+  const isBigram = term.includes('__');
+
+  if (isBigram) {
+    if (counts.phishing < MIN_BIGRAM_CLASS_DOC_FREQUENCY
+      || counts.legitimate < MIN_BIGRAM_CLASS_DOC_FREQUENCY) {
+      return false;
+    }
+  } else if (total < MIN_TERM_DOC_FREQUENCY) {
+    return false;
+  }
+
+  if (phishAssoc > 0) {
+    if (classBalance >= AMBIGUOUS_CLASS_BALANCE) return false;
+    if (isBigram && minorityCount / Math.max(counts.phishing, 1) < MIN_BIGRAM_MINORITY_RATIO) {
+      return false;
+    }
+    if (!isBigram && minorityCount / Math.max(counts.phishing, 1) < MIN_UNIGRAM_MINORITY_RATIO) {
+      return false;
+    }
+  } else if (phishAssoc < 0) {
+    if (classBalance >= AMBIGUOUS_CLASS_BALANCE) return false;
+    if (isBigram && minorityCount / Math.max(counts.legitimate, 1) < MIN_BIGRAM_MINORITY_RATIO) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 function selectDiscriminativeFeatures(docs, maxFeatures = 8000) {
   const phishingDocs = docs.filter((doc) => doc.label === 'phishing');
   const legitimateDocs = docs.filter((doc) => doc.label === 'legitimate');
@@ -247,19 +371,7 @@ function selectDiscriminativeFeatures(docs, maxFeatures = 8000) {
       const phishAssoc = (counts.phishing / Math.max(total, 1)) - phishRate;
       return { term, counts, chiSquare, total, phishAssoc };
     })
-    .filter(({ term, counts, total, phishAssoc }) => {
-      if (term.includes('__')) {
-        return counts.phishing >= MIN_BIGRAM_CLASS_DOC_FREQUENCY
-          && counts.legitimate >= MIN_BIGRAM_CLASS_DOC_FREQUENCY;
-      }
-      if (total < MIN_TERM_DOC_FREQUENCY) return false;
-      if (phishAssoc > 0) {
-        const classBalance = Math.min(counts.phishing, counts.legitimate)
-          / Math.max(counts.phishing, counts.legitimate);
-        if (classBalance >= 0.25) return false;
-      }
-      return true;
-    });
+    .filter((entry) => passesVocabularyFeatureFilter(entry));
 
   const perSide = Math.floor(maxFeatures / 2);
   const phishingTerms = entries
@@ -276,7 +388,7 @@ function selectDiscriminativeFeatures(docs, maxFeatures = 8000) {
 
   const selected = new Set([...phishingTerms, ...legitimateTerms]);
   const remaining = entries
-    .filter(({ term }) => !selected.has(term))
+    .filter(({ term, chiSquare }) => !selected.has(term) && chiSquare > 0)
     .sort((a, b) => b.chiSquare - a.chiSquare)
     .slice(0, Math.max(0, maxFeatures - selected.size))
     .map(({ term }) => term);
@@ -787,7 +899,7 @@ function trainLogisticRegression(
       const prediction = sigmoid(linearScore);
       const error = (prediction - target) * classWeight;
 
-      bias -= learningRate * error;
+      bias = Math.max(-MAX_LR_BIAS_ABS, Math.min(MAX_LR_BIAS_ABS, bias - learningRate * error));
       Object.entries(vector).forEach(([term, value]) => {
         if (weights[term] === undefined) weights[term] = 0;
         weights[term] = clipWeight(
@@ -940,6 +1052,8 @@ function predictNaiveBayes(tokens, model) {
 function findOptimalThreshold(probabilities, labels) {
   let bestThreshold = 0.5;
   let bestScore = -1;
+  let fallbackThreshold = 0.5;
+  let fallbackScore = -1;
 
   for (let threshold = 0.32; threshold <= 0.52; threshold += 0.01) {
     let tp = 0;
@@ -958,15 +1072,21 @@ function findOptimalThreshold(probabilities, labels) {
     const precision = tp / (tp + fp || 1);
     const f1 = (2 * precision * recall) / (precision + recall || 1);
 
+    if (f1 >= fallbackScore) {
+      fallbackScore = f1;
+      fallbackThreshold = threshold;
+    }
+
     if (recall >= 0.9 && f1 >= bestScore) {
       bestScore = f1;
       bestThreshold = threshold;
     }
   }
 
-  return Number(bestThreshold.toFixed(2));
+  return Number((bestScore >= 0 ? bestThreshold : fallbackThreshold).toFixed(2));
 }
 
+// Thresholds are tuned on the validation split only (see trainDatasetModel), never on holdout test data.
 function calibrateDecisionThresholds(model, validationDocs) {
   const lrProbabilities = [];
   const nbProbabilities = [];
@@ -988,27 +1108,9 @@ function getDecisionThreshold(model, modelType) {
   return model.decisionThresholds?.[modelType] ?? DEFAULT_DECISION_THRESHOLDS[modelType] ?? 0.5;
 }
 
-function applyLowCoverageBoost(mlProbability, tokens, matchedFeatures, totalTokens) {
-  const keywordHits = countPhishingKeywordHits(tokens);
-  const coverage = matchedFeatures / Math.max(totalTokens, 1);
-  let boost = 0;
-
-  if (coverage < 0.12) {
-    boost += 0.05;
-  }
-  if (matchedFeatures === 0 && keywordHits > 0) {
-    boost += Math.min(0.2, keywordHits * 0.05);
-  }
-  if (keywordHits >= 3) {
-    boost += Math.min(0.12, keywordHits * 0.03);
-  }
-
-  return Math.min(0.9999, mlProbability + boost);
-}
-
 const datasetLoadResult = loadAllDatasets();
 const MODEL_CACHE_PATH = join(__dirname, 'data', '.model-cache.json');
-const MODEL_CACHE_VERSION = 13;
+const MODEL_CACHE_VERSION = 15;
 
 function buildModelFingerprint() {
   const datasetPaths = listDatasetCsvFiles();
@@ -1855,29 +1957,30 @@ function buildPredictionExplanation(tokens, model, modelType, tfIdfVector, text,
   };
 }
 
-function calibrateProbability(mlProbability, tokens, model, sentiment, text, threshold) {
+// Heuristic risk context for explainability only — does not change the ML verdict.
+function calibrateProbability(mlProbability, tokens, model, sentiment, text) {
   let adjustment = 0;
   const suspiciousUrlCount = countSuspiciousUrls(text);
   const keywordHits = countPhishingKeywordHits(tokens);
 
   if (suspiciousUrlCount > 0) {
-    adjustment += Math.min(0.08, suspiciousUrlCount * 0.04);
+    adjustment += Math.min(0.04, suspiciousUrlCount * 0.02);
   }
 
   if (sentiment.urgencyScore >= 35) {
-    adjustment += 0.05;
-  } else if (sentiment.urgencyScore >= 15) {
     adjustment += 0.03;
+  } else if (sentiment.urgencyScore >= 15) {
+    adjustment += 0.02;
   }
 
   if (sentiment.fearScore >= 35) {
-    adjustment += 0.05;
-  } else if (sentiment.fearScore >= 15) {
     adjustment += 0.03;
+  } else if (sentiment.fearScore >= 15) {
+    adjustment += 0.02;
   }
 
   if (keywordHits >= 2) {
-    adjustment += Math.min(0.06, keywordHits * 0.015);
+    adjustment += Math.min(0.03, keywordHits * 0.008);
   }
 
   const clearlyNeutral = sentiment.urgencyScore < 10
@@ -1896,25 +1999,15 @@ function calibrateProbability(mlProbability, tokens, model, sentiment, text, thr
     });
 
     if (legitSignals >= 5) {
-      adjustment -= Math.min(0.05, legitSignals * 0.008);
+      adjustment -= Math.min(0.03, legitSignals * 0.005);
     }
   }
 
-  adjustment = Math.max(-0.05, Math.min(0.08, adjustment));
-  let calibrated = Math.min(0.9999, Math.max(0.0001, mlProbability + adjustment));
-
-  const mlIsPhishing = mlProbability >= threshold;
-  const calibratedIsPhishing = calibrated >= threshold;
-
-  if (mlIsPhishing !== calibratedIsPhishing) {
-    calibrated = mlIsPhishing
-      ? Math.max(threshold + 0.001, mlProbability)
-      : Math.min(threshold - 0.001, mlProbability);
-    adjustment = Number((calibrated - mlProbability).toFixed(4));
-  }
+  adjustment = Math.max(-0.04, Math.min(0.04, adjustment));
+  const contextualScore = Math.min(0.9999, Math.max(0.0001, mlProbability + adjustment));
 
   return {
-    calibrated,
+    calibrated: contextualScore,
     adjustment: Number(adjustment.toFixed(4)),
     mlProbability: Number(mlProbability.toFixed(4)),
   };
@@ -1927,7 +2020,7 @@ function logPredictionTrace(trace) {
 function mapProbabilityToResult(rawProbability, threshold = 0.5) {
   const phishingProbability = Number(Math.min(0.9999, Math.max(0.0001, rawProbability)).toFixed(4));
   const legitimateProbability = Number((1 - phishingProbability).toFixed(4));
-  const prediction = phishingProbability > threshold ? 1 : 0;
+  const prediction = phishingProbability >= threshold ? 1 : 0;
   const verdict = prediction === 1 ? 'Phishing' : 'Legitimate';
   const confidenceScore = Math.round((prediction === 1 ? phishingProbability : legitimateProbability) * 100);
 
@@ -1966,22 +2059,15 @@ function classifyEmail(text, modelType, options = {}) {
     ? rawNaiveBayesProbability
     : rawLogisticProbability;
 
-  const boostedProbability = applyLowCoverageBoost(
-    rawProbability,
-    tokens,
-    featureCount,
-    tokens.length,
-  );
   const sentiment = analyzeSentiment(text);
   const calibration = calibrateProbability(
-    boostedProbability,
+    rawProbability,
     tokens,
     trainedModel,
     sentiment,
     text,
-    decisionThreshold,
   );
-  const result = mapProbabilityToResult(calibration.calibrated, decisionThreshold);
+  const result = mapProbabilityToResult(rawProbability, decisionThreshold);
   const explanation = buildPredictionExplanation(
     tokens,
     trainedModel,
@@ -2006,8 +2092,7 @@ function classifyEmail(text, modelType, options = {}) {
     ),
     rawLogisticRegressionProbability: Number(rawLogisticProbability.toFixed(4)),
     rawNaiveBayesProbability: Number(rawNaiveBayesProbability.toFixed(4)),
-    probabilityBeforeCalibration: Number(boostedProbability.toFixed(4)),
-    lowCoverageBoost: Number((boostedProbability - rawProbability).toFixed(4)),
+    heuristicContextScore: Number(calibration.calibrated.toFixed(4)),
     calibrationAdjustment: calibration.adjustment,
     finalProbability: result.calibratedProbability,
     decisionThreshold,
@@ -2032,7 +2117,6 @@ function classifyEmail(text, modelType, options = {}) {
     rawPhishingProbability: Number(rawProbability.toFixed(4)),
     rawLogisticRegressionProbability: Number(rawLogisticProbability.toFixed(4)),
     rawNaiveBayesProbability: Number(rawNaiveBayesProbability.toFixed(4)),
-    probabilityBeforeCalibration: Number(boostedProbability.toFixed(4)),
     calibratedPhishingProbability: Number(calibration.calibrated.toFixed(4)),
     calibrationAdjustment: calibration.adjustment,
     finalPhishingProbability: result.calibratedProbability,
@@ -2111,11 +2195,31 @@ function authMiddleware(req, res, next) {
   }
 
   try {
-    req.user = jwt.verify(token, JWT_SECRET);
+    const payload = jwt.verify(token, JWT_SECRET);
+    const userId = parsePositiveInt(payload.id);
+    if (!userId) {
+      return res.status(401).json({ error: 'Your session expired. Please log in again.' });
+    }
+    req.user = {
+      id: userId,
+      email: String(payload.email || '').trim().toLowerCase().slice(0, MAX_EMAIL_LENGTH),
+    };
     return next();
   } catch {
     return res.status(401).json({ error: 'Your session expired. Please log in again.' });
   }
+}
+
+function verifyAuthToken(token) {
+  const payload = jwt.verify(token, JWT_SECRET);
+  const userId = parsePositiveInt(payload.id);
+  if (!userId) {
+    throw new jwt.JsonWebTokenError('Invalid token payload');
+  }
+  return {
+    id: userId,
+    email: String(payload.email || '').trim().toLowerCase().slice(0, MAX_EMAIL_LENGTH),
+  };
 }
 
 app.get('/api/health', async (_req, res) => {
@@ -2131,51 +2235,67 @@ app.get('/api/health', async (_req, res) => {
     ok: true,
     database,
     ml: mlReady ? 'ready' : 'loading',
-    port: PORT,
   });
 });
 
-app.post('/api/auth/register', async (req, res) => {
-  const { name, email, password } = req.body;
+app.post('/api/auth/register', authRateLimiter, async (req, res) => {
+  const name = normalizeAuthName(req.body?.name);
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  const password = String(req.body?.password || '');
 
   if (!name || !email || !password) {
     return res.status(400).json({ error: 'Name, email, and password are required.' });
   }
 
-  if (password.length < 6) {
-    return res.status(400).json({ error: 'Password must be at least 6 characters.' });
+  if (!isValidEmail(email)) {
+    return res.status(400).json({ error: 'Enter a valid email address.' });
+  }
+
+  const passwordError = validatePassword(password);
+  if (passwordError) {
+    return res.status(400).json({ error: passwordError });
   }
 
   try {
     await ensureDatabaseReady();
-    const passwordHash = await bcrypt.hash(password, 10);
+    const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
     const [result] = await db.query(
       'INSERT INTO users (name, email, password_hash) VALUES (?, ?, ?)',
-      [name.trim(), email.trim().toLowerCase(), passwordHash],
+      [name, email, passwordHash],
     );
     return res.status(201).json({
       success: true,
       message: 'Registration successful. Please log in to continue.',
-      user: { id: result.insertId, name: name.trim(), email: email.trim().toLowerCase() },
+      user: { id: result.insertId, name, email },
     });
   } catch (error) {
     if (error.code === 'ER_DUP_ENTRY') {
       return res.status(409).json({ error: 'This email is already registered.' });
     }
-    return res.status(500).json({ error: 'Registration failed. Check the database connection.' });
+    console.error('[register] failed:', error.message);
+    return res.status(500).json({ error: 'Registration failed. Please try again later.' });
   }
 });
 
-app.post('/api/auth/login', async (req, res) => {
-  const { email, password } = req.body;
+app.post('/api/auth/login', authRateLimiter, async (req, res) => {
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  const password = String(req.body?.password || '');
 
   if (!email || !password) {
     return res.status(400).json({ error: 'Email and password are required.' });
   }
 
+  if (!isValidEmail(email)) {
+    return res.status(400).json({ error: 'Enter a valid email address.' });
+  }
+
+  if (password.length > MAX_PASSWORD_LENGTH) {
+    return res.status(400).json({ error: 'Invalid email or password.' });
+  }
+
   try {
     await ensureDatabaseReady();
-    const [rows] = await db.query('SELECT * FROM users WHERE email = ?', [email.trim().toLowerCase()]);
+    const [rows] = await db.query('SELECT id, name, email, password_hash FROM users WHERE email = ?', [email]);
     const user = rows[0];
 
     if (!user || !(await bcrypt.compare(password, user.password_hash))) {
@@ -2184,17 +2304,27 @@ app.post('/api/auth/login', async (req, res) => {
 
     const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '8h' });
     return res.json({ token, user: { id: user.id, name: user.name, email: user.email } });
-  } catch {
-    return res.status(500).json({ error: 'Login failed. Check the database connection.' });
+  } catch (error) {
+    console.error('[login] failed:', error.message);
+    return res.status(500).json({ error: 'Login failed. Please try again later.' });
   }
 });
 
-app.post('/api/analyze', async (req, res) => {
-  const { text, modelType = 'logistic_regression' } = req.body;
+app.post('/api/analyze', analyzeRateLimiter, async (req, res) => {
+  const text = String(req.body?.text || '');
+  const modelType = req.body?.modelType;
   const safeModel = modelType === 'naive_bayes' ? 'naive_bayes' : 'logistic_regression';
 
-  if (!text || !text.trim()) {
+  if (!text.trim()) {
     return res.status(400).json({ error: 'Paste or upload email content before scanning.' });
+  }
+
+  if (text.length > MAX_ANALYZE_TEXT_LENGTH) {
+    return res.status(400).json({ error: `Email content must be ${MAX_ANALYZE_TEXT_LENGTH.toLocaleString()} characters or fewer.` });
+  }
+
+  if (modelType !== undefined && modelType !== 'logistic_regression' && modelType !== 'naive_bayes') {
+    return res.status(400).json({ error: 'Choose either Standard check or Second opinion.' });
   }
 
   if (!mlReady) {
@@ -2211,16 +2341,19 @@ app.post('/api/analyze', async (req, res) => {
 
   let analysis;
   try {
-    analysis = classifyEmail(text, safeModel, { includeDebug: true });
+    analysis = classifyEmail(text, safeModel, { includeDebug: process.env.DEBUG_ANALYSIS === 'true' });
   } catch (error) {
-    console.error('[analyze] classification failed:', error);
-    return res.status(500).json({ error: 'Scan failed while analyzing the email. Restart the backend and try again.' });
+    console.error('[analyze] classification failed:', error.message);
+    return res.status(500).json({ error: 'Scan failed while analyzing the email. Please try again.' });
   }
 
-  console.log('[analyze] debug trace', analysis.predictionTrace ?? analysis._debug);
+  if (process.env.DEBUG_ANALYSIS === 'true') {
+    console.log('[analyze] debug trace', analysis.predictionTrace ?? analysis._debug);
+  }
 
-  const { _debug, ...clientAnalysis } = analysis;
+  const { _debug, predictionTrace, ...clientAnalysis } = analysis;
   void _debug;
+  void predictionTrace;
 
   const authHeader = req.headers.authorization || '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
@@ -2228,7 +2361,7 @@ app.post('/api/analyze', async (req, res) => {
 
   if (token) {
     try {
-      const user = jwt.verify(token, JWT_SECRET);
+      const user = verifyAuthToken(token);
       await ensureDatabaseReady();
       await db.query(
         `INSERT INTO detection_history
@@ -2248,7 +2381,7 @@ app.post('/api/analyze', async (req, res) => {
       if (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError') {
         return res.status(401).json({ error: 'Your session expired. Please log in again.' });
       }
-      historyWarning = 'Scan completed, but history was not saved because the database is unavailable. Start XAMPP MySQL to enable scan history.';
+      historyWarning = 'Scan completed, but history was not saved because the database is unavailable.';
       console.warn('[analyze] history save skipped:', error.message);
     }
   }
@@ -2274,11 +2407,16 @@ app.get('/api/history', authMiddleware, async (req, res) => {
 });
 
 app.delete('/api/history/:id', authMiddleware, async (req, res) => {
+  const historyId = parsePositiveInt(req.params.id);
+  if (!historyId) {
+    return res.status(400).json({ error: 'Invalid history item.' });
+  }
+
   try {
     await ensureDatabaseReady();
     const [result] = await db.query(
       'DELETE FROM detection_history WHERE id = ? AND user_id = ?',
-      [req.params.id, req.user.id],
+      [historyId, req.user.id],
     );
 
     if (result.affectedRows === 0) {
