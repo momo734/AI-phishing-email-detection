@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "concurrently -k -n server,client -c blue,green \"node server.js\" \"node scripts/wait-for-backend.mjs && vite\"",
+    "present": "npm run dev",
+    "stop": "node scripts/stop-mailshield.mjs",
     "start": "npm run dev",
     "server": "node server.js",
     "build": "vite build",

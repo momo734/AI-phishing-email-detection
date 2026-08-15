@@ -2310,6 +2310,37 @@ app.post('/api/auth/login', authRateLimiter, async (req, res) => {
   }
 });
 
+function formatPercent(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 'n/a';
+  return `${Math.round((numeric <= 1 ? numeric * 100 : numeric))}%`;
+}
+
+function logAnalyzeResult(analysis, modelType) {
+  if (process.env.LOG_ANALYSIS === 'false') return;
+
+  const modelName = modelType === 'naive_bayes' ? 'Naive Bayes' : 'Logistic Regression';
+  const topWords = analysis.explanation?.topContributingWords?.slice(0, 6) || [];
+  const topTerms = analysis.tfidf?.topTerms?.slice(0, 6) || [];
+
+  console.log('\n[analyze] ML result');
+  console.log(`  Model used: ${modelName}`);
+  console.log(`  Verdict: ${analysis.verdict} (${analysis.score}%)`);
+  console.log(`  Logistic Regression: ${formatPercent(analysis.rawLogisticRegressionProbability)}`);
+  console.log(`  Naive Bayes: ${formatPercent(analysis.rawNaiveBayesProbability)}`);
+  console.log(`  Threshold: ${formatPercent(analysis.decisionThreshold)} | Vocabulary coverage: ${formatPercent(analysis.vocabularyCoverage)}`);
+
+  if (topWords.length) {
+    console.log(`  Top contributing words: ${topWords.map((word) => `${word.term} (${word.impact}, ${word.score ?? word.tfidf})`).join(', ')}`);
+  }
+
+  if (topTerms.length) {
+    console.log(`  Top TF-IDF terms: ${topTerms.map((term) => `${term.term}=${term.value}`).join(', ')}`);
+  }
+
+  console.log('');
+}
+
 app.post('/api/analyze', analyzeRateLimiter, async (req, res) => {
   const text = String(req.body?.text || '');
   const modelType = req.body?.modelType;
@@ -2324,7 +2355,7 @@ app.post('/api/analyze', analyzeRateLimiter, async (req, res) => {
   }
 
   if (modelType !== undefined && modelType !== 'logistic_regression' && modelType !== 'naive_bayes') {
-    return res.status(400).json({ error: 'Choose either Standard check or Second opinion.' });
+    return res.status(400).json({ error: 'Choose either Logistic Regression or Naive Bayes.' });
   }
 
   if (!mlReady) {
@@ -2350,6 +2381,8 @@ app.post('/api/analyze', analyzeRateLimiter, async (req, res) => {
   if (process.env.DEBUG_ANALYSIS === 'true') {
     console.log('[analyze] debug trace', analysis.predictionTrace ?? analysis._debug);
   }
+
+  logAnalyzeResult(analysis, safeModel);
 
   const { _debug, predictionTrace, ...clientAnalysis } = analysis;
   void _debug;

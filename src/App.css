@@ -280,6 +280,12 @@ p {
   background: var(--warning-soft);
 }
 
+.backend-notice.checking {
+  border-color: rgba(56, 189, 248, 0.28);
+  color: #bae6fd;
+  background: rgba(14, 165, 233, 0.12);
+}
+
 .scanner-layout {
   display: grid;
   grid-template-columns: minmax(0, 1.4fr) minmax(280px, 420px);

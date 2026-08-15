@@ -5,16 +5,16 @@ const API_BASE_URL = import.meta.env.DEV ? '' : (import.meta.env.VITE_API_URL ||
 const FREE_SCAN_LIMIT = 5;
 const GUEST_SCANS_KEY = 'mailshieldGuestScans';
 const modelLabels = {
-  logistic_regression: 'Standard check',
-  naive_bayes: 'Second opinion',
+  logistic_regression: 'Logistic Regression',
+  naive_bayes: 'Naive Bayes',
 };
 
 function formatVerdictLabel(label, isPhishingFallback = false) {
   const normalized = String(label || '').trim().toLowerCase();
-  if (normalized === 'phishing') return 'Looks like a scam';
-  if (normalized === 'legitimate') return 'Looks safe';
+  if (normalized === 'phishing') return 'Phishing';
+  if (normalized === 'legitimate') return 'Legitimate';
   if (normalized) return label;
-  return isPhishingFallback ? 'Looks like a scam' : 'Looks safe';
+  return isPhishingFallback ? 'Phishing' : 'Legitimate';
 }
 
 const features = [
@@ -118,6 +118,7 @@ function App() {
   const [analysis, setAnalysis] = useState(null);
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [backendStatus, setBackendStatus] = useState('checking');
   const [message, setMessage] = useState('');
   const [authMode, setAuthMode] = useState('login');
   const [showAuth, setShowAuth] = useState(false);
@@ -159,6 +160,34 @@ function App() {
     }
   }, [session]);
 
+  useEffect(() => {
+    let cancelled = false;
+    let retryTimer;
+
+    const checkBackend = async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/health`);
+        if (!response.ok) throw new Error('Backend unavailable');
+        const data = await response.json();
+        if (!cancelled) {
+          setBackendStatus(data.ok ? 'ready' : 'offline');
+        }
+      } catch {
+        if (!cancelled) {
+          setBackendStatus('offline');
+          retryTimer = window.setTimeout(checkBackend, 3000);
+        }
+      }
+    };
+
+    checkBackend();
+
+    return () => {
+      cancelled = true;
+      if (retryTimer) window.clearTimeout(retryTimer);
+    };
+  }, []);
+
   const request = useCallback(async (path, options = {}) => {
     let response;
 
@@ -172,7 +201,7 @@ function App() {
         },
       });
     } catch {
-      throw new Error('Cannot reach the backend. Run npm run dev from the PhishingDetection folder and wait for "MailShield backend running" in the terminal.');
+      throw new Error('Cannot reach the backend. Double-click Start-MailShield.bat in the project folder and wait until the browser opens.');
     }
 
     const data = await response.json().catch(() => ({}));
@@ -180,10 +209,11 @@ function App() {
       throw new Error(
         data.error
         || (response.status === 502 || response.status === 504
-          ? 'Cannot reach the backend. Run npm run dev from the PhishingDetection folder and wait for "MailShield backend running".'
+          ? 'Cannot reach the backend. Double-click Start-MailShield.bat and keep that window open.'
           : `Request failed (${response.status}).`),
       );
     }
+    setBackendStatus('ready');
     return data;
   }, [session]);
 
@@ -435,6 +465,16 @@ function App() {
           </div>
         </section>
 
+        {backendStatus === 'offline' && (
+          <div className="notice backend-notice">
+            Server not running. Double-click <strong>Start-MailShield.bat</strong> in the project folder, then open{' '}
+            <strong>http://127.0.0.1:5174</strong>. To stop later, use <strong>Stop-MailShield.bat</strong>.
+          </div>
+        )}
+        {backendStatus === 'checking' && (
+          <div className="notice backend-notice checking">Connecting to MailShield server...</div>
+        )}
+
         {message && <div className="notice">{message}</div>}
 
         {view === 'features' && (
@@ -486,9 +526,9 @@ function App() {
                     <p className="eyebrow">Email to check</p>
                     <h2>Email scanner</h2>
                   </div>
-                  <select value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)} aria-label="Scan type">
-                    <option value="logistic_regression">Standard check</option>
-                    <option value="naive_bayes">Second opinion</option>
+                  <select value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)} aria-label="Model">
+                    <option value="logistic_regression">Logistic Regression</option>
+                    <option value="naive_bayes">Naive Bayes</option>
                   </select>
                 </div>
 
@@ -585,19 +625,19 @@ function App() {
                   </div>
                   <dl className="score-details">
                     <div>
-                      <dt>Check type</dt>
+                      <dt>Model</dt>
                       <dd>{modelLabels[analysis.modelUsed || analysis.model_used] || modelLabels[selectedModel]}</dd>
                     </div>
                     <div>
-                      <dt>How sure we are</dt>
-                      <dd>{confidencePercent}% ({isPhishing ? 'Looks like a scam' : 'Looks safe'})</dd>
+                      <dt>Confidence</dt>
+                      <dd>{confidencePercent}% ({isPhishing ? 'Phishing' : 'Legitimate'})</dd>
                     </div>
                     <div>
-                      <dt>Scam likelihood</dt>
+                      <dt>Phishing probability</dt>
                       <dd>{phishPercent}%</dd>
                     </div>
                     <div>
-                      <dt>Safe likelihood</dt>
+                      <dt>Legitimate probability</dt>
                       <dd>{legitPercent}%</dd>
                     </div>
                     <div>
@@ -683,7 +723,7 @@ function App() {
                 </div>
               ) : (
                 <div className="empty-result">
-                  Paste an email and tap Scan to see if it looks safe.
+                  Paste an email and tap Scan to see Phishing or Legitimate results.
                 </div>
               )}
             </aside>
@@ -771,7 +811,7 @@ function App() {
 
           <div className="footer-meta">
             <span>&copy; {new Date().getFullYear()} MailShield</span>
-            <span>Two scan modes: standard check &amp; second opinion</span>
+            <span>Models: Logistic Regression &amp; Naive Bayes</span>
           </div>
         </div>
       </footer>
