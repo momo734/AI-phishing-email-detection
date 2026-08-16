@@ -705,21 +705,6 @@ function App() {
                       )}
                     </div>
                   )}
-
-                  <div className="analysis-card terms-list">
-                    <h3>Words that stood out</h3>
-                    {analysis.tfidf?.topTerms?.length || analysis.tfidf?.top_terms?.length ? (
-                      (analysis.tfidf.topTerms || analysis.tfidf.top_terms).map((term, idx) => (
-                        <div className="term-row" key={`${term.term}-${idx}`}>
-                          <span>{term.term}</span>
-                          <meter min="0" max="1" value={Math.min(term.value ?? 0, 1)} />
-                          <b>{term.value ?? 0}</b>
-                        </div>
-                      ))
-                    ) : (
-                      <p>No dataset vocabulary terms were found in this email.</p>
-                    )}
-                  </div>
                 </div>
               ) : (
                 <div className="empty-result">
