@@ -61,7 +61,7 @@ http://localhost:5173
 Put your phishing email dataset here:
 
 ```txt
-https://drive.google.com/drive/folders/1Z1CUEeY4MXCuTgQDKvqIbCRPJ_RjyCUs?usp=sharing```
+https://1024terabox.com/s/1rm4Mc8udtyqiqcn1hrEPGw```
 
 The CSV needs these columns:
 
